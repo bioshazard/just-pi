@@ -360,20 +360,28 @@ h2 {
   display: grid;
   gap: 0.4rem;
   align-content: start;
+  max-width: 100%;
 }
 
 .review-entry-meta {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+  background: rgba(10, 15, 30, 0.78);
   color: #93a6d2;
-  font-size: 0.76rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 .review-bubble,
 .review-shell-command,
 .review-shell-output,
 .review-status {
-  border-radius: 12px;
+  border-radius: 16px;
   border: 1px solid rgba(142, 158, 196, 0.16);
 }
 
@@ -383,17 +391,56 @@ h2 {
   margin: 0;
   padding: 0.8rem 0.9rem;
   background: rgba(4, 7, 16, 0.9);
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.review-entry-user,
+.review-entry-assistant {
+  width: 100%;
+  max-width: 92%;
+}
+
+.review-entry-user {
+  justify-self: end;
+  justify-items: end;
+}
+
+.review-entry-assistant {
+  justify-self: start;
+}
+
+.review-entry-user .review-entry-meta {
+  border-color: rgba(74, 108, 247, 0.24);
+  background: rgba(74, 108, 247, 0.12);
+  color: #bfd0ff;
 }
 
 .review-entry-user .review-bubble {
   background: rgba(74, 108, 247, 0.18);
   border-color: rgba(74, 108, 247, 0.28);
+  border-radius: 18px 18px 6px 18px;
+}
+
+.review-entry-assistant .review-entry-meta {
+  color: #a7b9e6;
 }
 
 .review-entry-assistant .review-bubble {
   background: rgba(10, 15, 30, 0.9);
+  border-radius: 18px 18px 18px 6px;
+}
+
+.review-entry-shell,
+.review-entry-notice {
+  max-width: 100%;
+}
+
+.review-entry-shell .review-entry-meta {
+  border-color: rgba(48, 188, 139, 0.22);
+  background: rgba(48, 188, 139, 0.1);
+  color: #aaf1cf;
 }
 
 .review-shell-command,
@@ -426,9 +473,19 @@ h2 {
   background: rgba(142, 158, 196, 0.08);
 }
 
+.review-entry-notice .review-entry-meta {
+  background: rgba(142, 158, 196, 0.1);
+}
+
 .review-entry-notice[data-tone="error"] .review-bubble {
   border-color: rgba(196, 59, 59, 0.26);
   background: rgba(196, 59, 59, 0.12);
+}
+
+.review-entry-notice[data-tone="error"] .review-entry-meta {
+  border-color: rgba(196, 59, 59, 0.26);
+  background: rgba(196, 59, 59, 0.12);
+  color: #ffc3c3;
 }
 
 .console-grid {
@@ -681,7 +738,7 @@ h2 {
 
   .review-log {
     display: grid;
-    gap: 0.9rem;
+    gap: 1rem;
     min-height: 0;
     overflow: auto;
     padding-right: 0.1rem;

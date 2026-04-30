@@ -212,7 +212,7 @@ function renderReviewLog(): void {
       bubble.textContent = entry.text || (entry.kind === "assistant" ? "…" : "");
       card.append(meta, bubble);
     } else if (entry.kind === "shell") {
-      meta.textContent = "Shell";
+      meta.textContent = "Command";
 
       const command = document.createElement("pre");
       command.className = "review-shell-command";
