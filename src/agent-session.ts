@@ -8,7 +8,7 @@ import { ShellRuntime } from "./shell";
 export const OPENROUTER_MODELS = getModels("openrouter").map((model) => model.id);
 
 const DEFAULT_MODEL =
-  OPENROUTER_MODELS.find((modelId) => modelId === "openai/gpt-4.1-mini") ?? OPENROUTER_MODELS[0] ?? "openai/gpt-4.1-mini";
+  OPENROUTER_MODELS.find((modelId) => modelId === "openrouter/free") ?? OPENROUTER_MODELS[0] ?? "openrouter/free";
 
 function textResult(text: string, details?: unknown) {
   return {
