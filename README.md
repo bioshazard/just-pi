@@ -1,0 +1,35 @@
+# just-pi
+
+Browser-native coding sandbox with:
+
+- **Pi agent loop** running in the client
+- **OpenRouter BYOK** stored in `localStorage`
+- **OPFS** for persistent files across refreshes
+- **just-bash** wired to the same workspace state as the agent tools
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
+
+## Usage
+
+1. Open the app in a modern browser with OPFS support.
+2. Paste an OpenRouter API key into the settings panel and save it.
+3. Pick or type an OpenRouter model ID.
+4. Use the **Agent prompt** form to ask the Browser-Native Systems Engineer to inspect or modify the workspace.
+5. Use the **Manual shell** form to run ad-hoc just-bash commands against the same OPFS-backed files.
+
+## Notes
+
+- Files persist in the browser's origin-private storage until you reset the workspace or clear site data.
+- The API key is never hardcoded; it is read from `localStorage` at runtime.
+- This scaffold uses the Pi agent core and Pi AI packages directly so the browser bundle stays compatible while preserving the coding-agent-style tool surface.
