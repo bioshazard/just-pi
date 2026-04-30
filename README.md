@@ -31,8 +31,7 @@ If the site does not publish on the first run, set the repository's **Pages** so
 1. Open the app in a modern browser with OPFS support.
 2. Paste an OpenRouter API key into the settings panel and save it.
 3. Pick or type an OpenRouter model ID.
-4. Use the **Agent prompt** form to ask the Browser-Native Systems Engineer to inspect or modify the workspace.
-5. Use the **Manual shell** form to run ad-hoc just-bash commands against the same OPFS-backed files.
+4. Use the **Quick start** callout or the **Command bar** for both workflows: start with `!` to run a just-bash command, or enter plain text to send a prompt to the Browser-Native Systems Engineer.
 
 ## Notes
 

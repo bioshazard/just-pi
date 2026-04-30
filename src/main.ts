@@ -14,13 +14,14 @@ import {
   shouldOpenAssistantBlock,
   updateAgentConfiguration,
 } from "./agent-session";
-import { OpfsWorkspace } from "./opfs";
+import { OpfsWorkspace, basename, type WorkspaceTreeEntry } from "./opfs";
 import { ShellRuntime } from "./shell";
 
 const STORAGE_KEYS = {
   apiKey: "just-pi.api-key",
   modelId: "just-pi.model-id",
   terminal: "just-pi.terminal",
+  activity: "just-pi.activity",
   shellCwd: "just-pi.shell-cwd",
 } as const;
 
@@ -33,18 +34,26 @@ function requireElement<T extends Element>(selector: string): T {
 }
 
 const terminalEl = requireElement<HTMLPreElement>("#terminal");
-const workspaceTreeEl = requireElement<HTMLPreElement>("#workspace-tree");
+const activityEl = requireElement<HTMLPreElement>("#activity-log");
+const workspaceTreeEl = requireElement<HTMLDivElement>("#workspace-tree");
+const fileTitleEl = requireElement<HTMLHeadingElement>("#file-title");
+const fileSubtitleEl = requireElement<HTMLParagraphElement>("#file-subtitle");
+const fileEditorEl = requireElement<HTMLTextAreaElement>("#file-editor");
+const fileSaveButton = requireElement<HTMLButtonElement>("#file-save");
+const fileReloadButton = requireElement<HTMLButtonElement>("#file-reload");
 const statusChipEl = requireElement<HTMLSpanElement>("#status-chip");
 const cwdChipEl = requireElement<HTMLSpanElement>("#cwd-chip");
 const apiKeyInput = requireElement<HTMLInputElement>("#api-key");
 const modelIdInput = requireElement<HTMLInputElement>("#model-id");
 const modelOptionsEl = requireElement<HTMLDataListElement>("#model-options");
+const onboardingPanelEl = requireElement<HTMLElement>("#onboarding-panel");
+const onboardingTitleEl = requireElement<HTMLHeadingElement>("#onboarding-title");
+const onboardingTextEl = requireElement<HTMLParagraphElement>("#onboarding-text");
 const promptForm = requireElement<HTMLFormElement>("#prompt-form");
 const promptInput = requireElement<HTMLTextAreaElement>("#prompt-input");
 const promptSubmit = requireElement<HTMLButtonElement>("#prompt-submit");
 const promptStop = requireElement<HTMLButtonElement>("#prompt-stop");
-const shellForm = requireElement<HTMLFormElement>("#shell-form");
-const shellInput = requireElement<HTMLInputElement>("#shell-input");
+const commandModeEl = requireElement<HTMLSpanElement>("#command-mode");
 const saveSettingsButton = requireElement<HTMLButtonElement>("#save-settings");
 const clearTranscriptButton = requireElement<HTMLButtonElement>("#clear-transcript");
 const resetWorkspaceButton = requireElement<HTMLButtonElement>("#reset-workspace");
@@ -55,6 +64,9 @@ const shell = new ShellRuntime(workspace, STORAGE_KEYS.shellCwd);
 
 let agent: Agent | undefined;
 let assistantBlockOpen = false;
+let activeFilePath: string | undefined;
+let fileEditorDirty = false;
+let workspaceEntries: WorkspaceTreeEntry[] = [];
 
 function readApiKey(): string {
   return localStorage.getItem(STORAGE_KEYS.apiKey) ?? "";
@@ -64,8 +76,20 @@ function readModelId(): string {
   return localStorage.getItem(STORAGE_KEYS.modelId) ?? getDefaultModelId();
 }
 
+function hasSavedApiKey(): boolean {
+  return readApiKey().trim().length > 0;
+}
+
+function isGitHubPagesHost(): boolean {
+  return window.location.hostname.endsWith(".github.io");
+}
+
 function persistTerminal(content: string): void {
   localStorage.setItem(STORAGE_KEYS.terminal, content);
+}
+
+function persistActivity(content: string): void {
+  localStorage.setItem(STORAGE_KEYS.activity, content);
 }
 
 function setStatus(label: string, tone: "idle" | "busy" | "error" = "idle"): void {
@@ -77,8 +101,32 @@ function setStatus(label: string, tone: "idle" | "busy" | "error" = "idle"): voi
 function setBusy(isBusy: boolean): void {
   promptSubmit.disabled = isBusy;
   promptInput.disabled = isBusy;
-  shellInput.disabled = isBusy;
   promptStop.disabled = !isBusy;
+}
+
+function updateCommandBarState(): void {
+  const trimmed = promptInput.value.trim();
+  const isShellCommand = trimmed.startsWith("!");
+
+  commandModeEl.dataset.mode = isShellCommand ? "shell" : "agent";
+  commandModeEl.textContent = isShellCommand ? "Shell mode" : "Agent mode";
+  promptSubmit.textContent = isShellCommand ? "Run command" : "Send prompt";
+}
+
+function updateOnboardingState(): void {
+  const ready = hasSavedApiKey();
+  onboardingPanelEl.dataset.state = ready ? "ready" : "setup";
+  onboardingTitleEl.textContent = ready ? "Ready to build" : "Quick start";
+
+  if (ready) {
+    onboardingTextEl.innerHTML =
+      "Agent mode is enabled. Use plain text for the agent, start with <code>!</code> for shell commands, and remember that files persist in this browser.";
+    return;
+  }
+
+  onboardingTextEl.innerHTML = isGitHubPagesHost()
+    ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; <code>!</code> shell commands already work without one."
+    : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; <code>!</code> shell commands already work without one.";
 }
 
 function appendTerminal(text: string): void {
@@ -92,9 +140,124 @@ function resetTerminal(text = ""): void {
   persistTerminal(text);
 }
 
+function appendActivity(text: string): void {
+  activityEl.textContent += text;
+  persistActivity(activityEl.textContent);
+  activityEl.scrollTop = activityEl.scrollHeight;
+}
+
+function resetActivity(text = ""): void {
+  activityEl.textContent = text;
+  persistActivity(text);
+}
+
+function setFileViewerState(): void {
+  if (!activeFilePath) {
+    fileTitleEl.textContent = "No file selected";
+    fileSubtitleEl.textContent = "Choose a file from the workspace to view or edit it.";
+    fileEditorEl.value = "";
+    fileEditorEl.disabled = true;
+    fileReloadButton.disabled = true;
+    fileSaveButton.disabled = true;
+    return;
+  }
+
+  fileTitleEl.textContent = `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}`;
+  fileSubtitleEl.textContent = activeFilePath;
+  fileEditorEl.disabled = false;
+  fileReloadButton.disabled = false;
+  fileSaveButton.disabled = !fileEditorDirty;
+}
+
+async function loadWorkspaceFile(path: string): Promise<void> {
+  fileEditorEl.value = await workspace.readText(path);
+  activeFilePath = path;
+  fileEditorDirty = false;
+  setFileViewerState();
+}
+
+async function openWorkspaceFile(path: string, options: { skipDirtyCheck?: boolean } = {}): Promise<void> {
+  if (!options.skipDirtyCheck && fileEditorDirty) {
+    const shouldDiscard = window.confirm("Discard unsaved file changes?");
+    if (!shouldDiscard) {
+      return;
+    }
+  }
+
+  await loadWorkspaceFile(path);
+  renderWorkspaceTree();
+}
+
+function renderWorkspaceTree(): void {
+  workspaceTreeEl.replaceChildren();
+
+  for (const entry of workspaceEntries) {
+    if (entry.kind === "directory") {
+      const row = document.createElement("div");
+      row.className = "workspace-node workspace-node-directory";
+      row.style.setProperty("--depth", String(entry.depth));
+      row.textContent = `▾ ${entry.name}`;
+      workspaceTreeEl.append(row);
+      continue;
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "workspace-node";
+    if (entry.path === activeFilePath) {
+      button.classList.add("is-active");
+    }
+    button.style.setProperty("--depth", String(entry.depth));
+    button.textContent = entry.name;
+    button.addEventListener("click", async () => {
+      await openWorkspaceFile(entry.path);
+    });
+    workspaceTreeEl.append(button);
+  }
+}
+
 async function refreshWorkspaceTree(): Promise<void> {
-  workspaceTreeEl.textContent = await workspace.renderTree();
+  workspaceEntries = await workspace.listTreeEntries();
   cwdChipEl.textContent = shell.getCwd();
+
+  const filePaths = workspaceEntries.filter((entry) => entry.kind === "file").map((entry) => entry.path);
+  if (activeFilePath && !filePaths.includes(activeFilePath)) {
+    activeFilePath = undefined;
+    fileEditorDirty = false;
+  }
+
+  renderWorkspaceTree();
+
+  const nextPath = activeFilePath ?? filePaths[0];
+  if (!nextPath) {
+    setFileViewerState();
+    return;
+  }
+
+  if (!activeFilePath) {
+    await loadWorkspaceFile(nextPath);
+    renderWorkspaceTree();
+    return;
+  }
+
+  if (!fileEditorDirty) {
+    await loadWorkspaceFile(nextPath);
+    renderWorkspaceTree();
+  } else {
+    setFileViewerState();
+  }
+}
+
+async function saveActiveFile(): Promise<void> {
+  if (!activeFilePath) {
+    return;
+  }
+
+  await workspace.writeFile(activeFilePath, fileEditorEl.value);
+  fileEditorDirty = false;
+  setFileViewerState();
+  appendTerminal(`\n[workspace] saved ${activeFilePath}\n`);
+  await refreshWorkspaceTree();
 }
 
 async function ensureStarterWorkspace(): Promise<void> {
@@ -117,9 +280,12 @@ function saveSettings(): void {
     updateAgentConfiguration(agent, readModelId(), shell);
   }
   appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
+  updateOnboardingState();
 }
 
 async function runManualShell(command: string): Promise<void> {
+  setStatus("Shell", "busy");
+  setBusy(true);
   appendTerminal(`\n$ ${command}\n`);
   try {
     const result = await shell.execute(command);
@@ -134,30 +300,34 @@ async function runManualShell(command: string): Promise<void> {
     }
   } catch (error) {
     appendTerminal(`[shell error] ${error instanceof Error ? error.message : String(error)}\n`);
+    setStatus("Shell error", "error");
+  } finally {
+    setBusy(false);
   }
   await refreshWorkspaceTree();
+  setStatus("Idle", "idle");
 }
 
 function wireAgent(agentInstance: Agent): void {
   agentInstance.subscribe(async (event) => {
     const toolText = formatToolEvent(event);
     if (toolText) {
-      appendTerminal(toolText);
+      appendActivity(toolText);
     }
 
     if (shouldOpenAssistantBlock(event)) {
       assistantBlockOpen = true;
-      appendTerminal("\nassistant> ");
+      appendActivity("\nassistant> ");
     }
 
     const delta = formatAssistantDelta(event);
     if (delta) {
-      appendTerminal(delta);
+      appendActivity(delta);
     }
 
     if (shouldCloseAssistantBlock(event) && assistantBlockOpen) {
       assistantBlockOpen = false;
-      appendTerminal("\n");
+      appendActivity("\n");
     }
 
     if (event.type === "agent_start") {
@@ -173,28 +343,55 @@ function wireAgent(agentInstance: Agent): void {
   });
 }
 
-async function submitPrompt(): Promise<void> {
-  const prompt = promptInput.value.trim();
+async function submitPrompt(prompt: string): Promise<void> {
   if (!prompt || !agent) {
     return;
   }
   if (!readApiKey()) {
-    appendTerminal("\n[error] Save an OpenRouter API key before sending a prompt.\n");
+    appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
     setStatus("Missing API key", "error");
     return;
   }
 
   updateAgentConfiguration(agent, readModelId(), shell);
-  appendTerminal(`\nuser> ${prompt}\n`);
+  appendActivity(`\nuser> ${prompt}\n`);
   promptInput.value = "";
+  updateCommandBarState();
 
   try {
     await agent.prompt(prompt);
   } catch (error) {
-    appendTerminal(`[agent error] ${error instanceof Error ? error.message : String(error)}\n`);
+    if (assistantBlockOpen) {
+      assistantBlockOpen = false;
+      appendActivity("\n");
+    }
+    appendActivity(`[agent error] ${error instanceof Error ? error.message : String(error)}\n`);
     setStatus("Agent error", "error");
     setBusy(false);
   }
+}
+
+async function submitCommandBar(): Promise<void> {
+  const input = promptInput.value.trim();
+  if (!input) {
+    return;
+  }
+
+  if (input.startsWith("!")) {
+    const command = input.slice(1).trim();
+    if (!command) {
+      appendTerminal("\n[error] Enter a shell command after !.\n");
+      setStatus("Missing command", "error");
+      return;
+    }
+
+    promptInput.value = "";
+    updateCommandBarState();
+    await runManualShell(command);
+    return;
+  }
+
+  await submitPrompt(input);
 }
 
 async function bootstrap(): Promise<void> {
@@ -204,8 +401,12 @@ async function bootstrap(): Promise<void> {
   apiKeyInput.value = readApiKey();
   populateModelOptions();
   resetTerminal(localStorage.getItem(STORAGE_KEYS.terminal) ?? "");
+  resetActivity(localStorage.getItem(STORAGE_KEYS.activity) ?? "");
   if (!terminalEl.textContent) {
     appendTerminal("just-pi ready. Configure an OpenRouter key, inspect the workspace, then prompt the agent.\n");
+  }
+  if (!activityEl.textContent) {
+    appendActivity("Agent activity will appear here.\n");
   }
 
   agent = createBrowserAgentSession({
@@ -219,8 +420,36 @@ async function bootstrap(): Promise<void> {
   wireAgent(agent);
   setStatus("Idle", "idle");
   setBusy(false);
+  updateCommandBarState();
+  updateOnboardingState();
   await refreshWorkspaceTree();
 }
+
+fileEditorEl.addEventListener("input", () => {
+  if (!activeFilePath) {
+    return;
+  }
+  fileEditorDirty = true;
+  setFileViewerState();
+});
+
+fileSaveButton.addEventListener("click", async () => {
+  await saveActiveFile();
+});
+
+fileReloadButton.addEventListener("click", async () => {
+  if (!activeFilePath) {
+    return;
+  }
+  if (fileEditorDirty) {
+    const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
+    if (!shouldDiscard) {
+      return;
+    }
+  }
+  await loadWorkspaceFile(activeFilePath);
+  renderWorkspaceTree();
+});
 
 saveSettingsButton.addEventListener("click", () => {
   saveSettings();
@@ -232,6 +461,7 @@ clearTranscriptButton.addEventListener("click", () => {
   }
   localStorage.removeItem("just-pi.messages");
   resetTerminal("Transcript cleared.\n");
+  resetActivity("Agent activity cleared.\n");
   setStatus("Idle", "idle");
 });
 
@@ -241,6 +471,8 @@ resetWorkspaceButton.addEventListener("click", async () => {
   }
   await workspace.clear();
   await ensureStarterWorkspace();
+  activeFilePath = undefined;
+  fileEditorDirty = false;
   appendTerminal("\n[workspace] reset complete.\n");
   await refreshWorkspaceTree();
 });
@@ -251,22 +483,38 @@ refreshWorkspaceButton.addEventListener("click", async () => {
 
 promptForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitPrompt();
+  await submitCommandBar();
 });
 
 promptStop.addEventListener("click", () => {
   agent?.abort();
-  appendTerminal("\n[agent] abort requested.\n");
+  appendActivity("\n[agent] abort requested.\n");
 });
 
-shellForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const command = shellInput.value.trim();
-  if (!command) {
+promptInput.addEventListener("input", () => {
+  updateCommandBarState();
+});
+
+promptInput.addEventListener("keydown", async (event) => {
+  if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
     return;
   }
-  shellInput.value = "";
-  await runManualShell(command);
+
+  event.preventDefault();
+  await submitCommandBar();
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-quick-command]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const command = button.dataset.quickCommand;
+    if (!command) {
+      return;
+    }
+    promptInput.value = command;
+    updateCommandBarState();
+    promptInput.focus();
+    promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+  });
 });
 
 void bootstrap();

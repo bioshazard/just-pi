@@ -162,6 +162,13 @@ export interface GrepOptions {
   limit?: number;
 }
 
+export interface WorkspaceTreeEntry {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  depth: number;
+}
+
 export class OpfsWorkspace implements IFileSystem {
   private readonly rootHandlePromise: Promise<FileSystemDirectoryHandle>;
   private readonly pathIndex = new Set<string>([ROOT_PATH]);
@@ -189,17 +196,18 @@ export class OpfsWorkspace implements IFileSystem {
     return Array.from(this.pathIndex).sort();
   }
 
+  public async listTreeEntries(startPath = ROOT_PATH): Promise<WorkspaceTreeEntry[]> {
+    await this.ready();
+    return this.collectTreeEntries(normalizePath(startPath), 0);
+  }
+
   public async renderTree(): Promise<string> {
-    const lines: string[] = [];
-    await this.walkDirectory(ROOT_PATH, async (currentPath, handle) => {
-      if (currentPath === ROOT_PATH) {
-        lines.push("/\n");
-        return;
-      }
-      const depth = normalizeSegments(currentPath).length - 1;
-      const prefix = `${"  ".repeat(Math.max(depth, 0))}${handle.kind === "directory" ? "📁" : "📄"}`;
-      lines.push(`${prefix} ${basename(currentPath)}\n`);
-    });
+    const lines = ["/\n"];
+    const entries = await this.listTreeEntries(ROOT_PATH);
+    for (const entry of entries) {
+      const prefix = `${"  ".repeat(entry.depth)}${entry.kind === "directory" ? "📁" : "📄"}`;
+      lines.push(`${prefix} ${entry.name}\n`);
+    }
     return lines.join("");
   }
 
@@ -509,6 +517,33 @@ export class OpfsWorkspace implements IFileSystem {
     await this.walkDirectory(ROOT_PATH, async (path) => {
       this.pathIndex.add(path);
     });
+  }
+
+  private async collectTreeEntries(path: string, depth: number): Promise<WorkspaceTreeEntry[]> {
+    const entries = await this.readdirWithFileTypes(path);
+    const sorted = [...entries].sort((left, right) => {
+      if (left.isDirectory !== right.isDirectory) {
+        return left.isDirectory ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    const results: WorkspaceTreeEntry[] = [];
+    for (const entry of sorted) {
+      const childPath = normalizePath(`${path}/${entry.name}`);
+      results.push({
+        path: childPath,
+        name: entry.name,
+        kind: entry.isDirectory ? "directory" : "file",
+        depth,
+      });
+
+      if (entry.isDirectory) {
+        results.push(...(await this.collectTreeEntries(childPath, depth + 1)));
+      }
+    }
+
+    return results;
   }
 
   private async walkDirectory(

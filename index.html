@@ -26,12 +26,14 @@
           <label class="field">
             <span>OpenRouter API key</span>
             <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-..." />
+            <span class="field-note">Stored only in this browser via localStorage.</span>
           </label>
 
           <label class="field">
             <span>Model</span>
             <input id="model-id" type="text" list="model-options" spellcheck="false" placeholder="openrouter/free" />
             <datalist id="model-options"></datalist>
+            <span class="field-note">Defaults to <code>openrouter/free</code>.</span>
           </label>
         </div>
 
@@ -41,50 +43,109 @@
           <button id="reset-workspace" type="button">Reset workspace</button>
           <button id="refresh-workspace" type="button">Refresh workspace</button>
         </div>
+
+        <section id="onboarding-panel" class="onboarding-panel" data-state="setup">
+          <div>
+            <h3 id="onboarding-title">Quick start</h3>
+            <p id="onboarding-text" class="panel-copy">
+              This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; <code>!</code> shell
+              commands already work without one.
+            </p>
+          </div>
+          <div class="button-row onboarding-actions">
+            <button type="button" class="secondary-button" data-quick-command="!ls">Try !ls</button>
+            <button
+              type="button"
+              class="secondary-button"
+              data-quick-command="Summarize the current workspace and explain what I can do here."
+            >
+              Summarize workspace
+            </button>
+            <button
+              type="button"
+              class="secondary-button"
+              data-quick-command="Create a tiny HTML, CSS, and JavaScript starter project in this workspace."
+            >
+              Scaffold starter project
+            </button>
+          </div>
+        </section>
       </section>
 
       <main class="main-grid">
-        <section class="panel terminal-panel">
+        <section class="panel console-panel">
           <div class="panel-header">
-            <h2>Terminal</h2>
+            <h2>Console</h2>
           </div>
-          <pre id="terminal" class="terminal" aria-live="polite"></pre>
+          <div class="console-grid">
+            <section class="console-section">
+              <div class="console-section-header">
+                <h3>Terminal</h3>
+              </div>
+              <pre id="terminal" class="terminal" aria-live="polite"></pre>
+            </section>
+
+            <section class="console-section">
+              <div class="console-section-header">
+                <h3>Agent activity</h3>
+              </div>
+              <pre id="activity-log" class="terminal activity-log" aria-live="polite"></pre>
+            </section>
+          </div>
         </section>
 
         <aside class="panel workspace-panel">
           <div class="panel-header">
             <h2>Workspace</h2>
           </div>
-          <pre id="workspace-tree" class="workspace-tree"></pre>
+          <div class="workspace-browser">
+            <div id="workspace-tree" class="workspace-tree" aria-label="Workspace files"></div>
+
+            <section class="file-viewer">
+              <div class="file-viewer-header">
+                <div>
+                  <h3 id="file-title">No file selected</h3>
+                  <p id="file-subtitle" class="file-subtitle">Choose a file from the workspace to view or edit it.</p>
+                </div>
+
+                <div class="button-row file-actions">
+                  <button id="file-reload" type="button" disabled>Reload file</button>
+                  <button id="file-save" type="button" disabled>Save file</button>
+                </div>
+              </div>
+
+              <textarea
+                id="file-editor"
+                class="file-editor"
+                spellcheck="false"
+                placeholder="Open a file from the workspace to inspect or edit it."
+                disabled
+              ></textarea>
+            </section>
+          </div>
         </aside>
       </main>
 
       <section class="input-grid">
         <form id="prompt-form" class="panel input-panel">
-          <div class="panel-header">
-            <h2>Agent prompt</h2>
+          <div class="panel-header input-panel-header">
+            <div>
+              <h2>Command bar</h2>
+              <p class="panel-copy">Start with <code>!</code> to run just-bash. Plain text goes to the agent.</p>
+            </div>
+            <span id="command-mode" class="mode-chip" data-mode="agent">Agent mode</span>
           </div>
           <textarea
             id="prompt-input"
-            rows="5"
-            placeholder="Ask the Browser-Native Systems Engineer to inspect, edit, or run code in the OPFS workspace."
+            rows="4"
+            placeholder="Ask the agent something, or run !ls -la against the OPFS workspace."
           ></textarea>
-          <div class="button-row">
-            <button id="prompt-submit" type="submit">Send prompt</button>
-            <button id="prompt-stop" type="button">Stop</button>
-          </div>
-        </form>
-
-        <form id="shell-form" class="panel input-panel">
-          <div class="panel-header">
-            <h2>Manual shell</h2>
-          </div>
-          <label class="field">
-            <span>Bash command</span>
-            <input id="shell-input" type="text" spellcheck="false" placeholder="ls -la" />
-          </label>
-          <div class="button-row">
-            <button id="shell-submit" type="submit">Run command</button>
+          <div class="input-footer">
+            <p class="input-hint">Press Ctrl+Enter or Cmd+Enter to submit.</p>
+            <div class="button-row">
+              <button id="prompt-submit" type="submit">Send prompt</button>
+              <button id="prompt-stop" type="button">Stop</button>
+            </div>
           </div>
         </form>
       </section>
