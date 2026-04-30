@@ -531,15 +531,14 @@ h2 {
     min-height: 100svh;
     grid-template-areas:
       "hero"
-      "controls"
       "nav"
       "view";
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     overflow: hidden;
   }
 
   .hero-copy {
-    font-size: 0.86rem;
+    display: none;
   }
 
   .status-card {
@@ -555,7 +554,7 @@ h2 {
   .mobile-nav {
     grid-area: nav;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.5rem;
   }
 
@@ -563,18 +562,28 @@ h2 {
     width: 100%;
   }
 
+  .controls,
   .main-grid,
   .input-grid {
     grid-area: view;
     min-height: 0;
   }
 
+  .controls {
+    overflow: auto;
+  }
+
   .main-grid {
     grid-template-columns: 1fr;
   }
 
+  .app[data-mobile-view="settings"] .main-grid,
+  .app[data-mobile-view="settings"] .input-grid,
+  .app[data-mobile-view="command"] .controls,
   .app[data-mobile-view="command"] .main-grid,
+  .app[data-mobile-view="console"] .controls,
   .app[data-mobile-view="console"] .input-grid,
+  .app[data-mobile-view="workspace"] .controls,
   .app[data-mobile-view="workspace"] .input-grid,
   .app[data-mobile-view="console"] .workspace-panel,
   .app[data-mobile-view="workspace"] .console-panel {

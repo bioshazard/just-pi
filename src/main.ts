@@ -26,7 +26,7 @@ const STORAGE_KEYS = {
   shellCwd: "just-pi.shell-cwd",
 } as const;
 
-type MobileView = "command" | "console" | "workspace";
+type MobileView = "settings" | "command" | "console" | "workspace";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -91,7 +91,10 @@ function isGitHubPagesHost(): boolean {
 
 function readMobileView(): MobileView {
   const stored = localStorage.getItem(STORAGE_KEYS.mobileView);
-  return stored === "console" || stored === "workspace" ? stored : "command";
+  if (stored === "settings" || stored === "command" || stored === "console" || stored === "workspace") {
+    return stored;
+  }
+  return hasSavedApiKey() ? "command" : "settings";
 }
 
 function persistTerminal(content: string): void {
@@ -543,7 +546,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-quick-command]").forEach((bu
 for (const button of mobileTabButtons) {
   button.addEventListener("click", () => {
     const view = button.dataset.mobileTarget;
-    if (view === "command" || view === "console" || view === "workspace") {
+    if (view === "settings" || view === "command" || view === "console" || view === "workspace") {
       setMobileView(view);
     }
   });
