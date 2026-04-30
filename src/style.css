@@ -346,6 +346,91 @@ h2 {
   min-height: 0;
 }
 
+.review-log {
+  display: none;
+}
+
+.review-empty {
+  margin: 0;
+  color: #93a6d2;
+  font-size: 0.84rem;
+}
+
+.review-entry {
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
+}
+
+.review-entry-meta {
+  color: #93a6d2;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.review-bubble,
+.review-shell-command,
+.review-shell-output,
+.review-status {
+  border-radius: 12px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+}
+
+.review-bubble,
+.review-shell-command,
+.review-shell-output {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  background: rgba(4, 7, 16, 0.9);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-entry-user .review-bubble {
+  background: rgba(74, 108, 247, 0.18);
+  border-color: rgba(74, 108, 247, 0.28);
+}
+
+.review-entry-assistant .review-bubble {
+  background: rgba(10, 15, 30, 0.9);
+}
+
+.review-shell-command,
+.review-shell-output {
+  font-family:
+    "SFMono-Regular",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  font-size: 0.84rem;
+}
+
+.review-shell-output {
+  background: rgba(8, 13, 26, 0.96);
+}
+
+.review-status {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.2rem 0.5rem;
+  color: #ffc3c3;
+  background: rgba(196, 59, 59, 0.18);
+  border-color: rgba(196, 59, 59, 0.26);
+  font-size: 0.75rem;
+}
+
+.review-entry-notice .review-bubble {
+  background: rgba(142, 158, 196, 0.08);
+}
+
+.review-entry-notice[data-tone="error"] .review-bubble {
+  border-color: rgba(196, 59, 59, 0.26);
+  background: rgba(196, 59, 59, 0.12);
+}
+
 .console-grid {
   grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--panel-gap);
@@ -590,12 +675,16 @@ h2 {
     display: none;
   }
 
-  .console-grid {
-    grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  .app[data-mobile-view="console"] .console-grid {
+    display: none;
   }
 
-  .console-section-activity {
-    order: -1;
+  .review-log {
+    display: grid;
+    gap: 0.9rem;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 0.1rem;
   }
 
   #prompt-form {

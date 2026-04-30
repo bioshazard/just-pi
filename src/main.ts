@@ -22,11 +22,16 @@ const STORAGE_KEYS = {
   modelId: "just-pi.model-id",
   terminal: "just-pi.terminal",
   activity: "just-pi.activity",
+  review: "just-pi.review",
   mobileView: "just-pi.mobile-view",
   shellCwd: "just-pi.shell-cwd",
 } as const;
 
 type MobileView = "settings" | "command" | "console" | "workspace";
+type ReviewEntry =
+  | { id: string; kind: "user" | "assistant"; text: string }
+  | { id: string; kind: "shell"; source: "user"; command: string; output: string; exitCode: number | null; pending: boolean }
+  | { id: string; kind: "notice"; text: string; tone: "info" | "error" };
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -39,6 +44,7 @@ function requireElement<T extends Element>(selector: string): T {
 const appEl = requireElement<HTMLDivElement>("#app");
 const terminalEl = requireElement<HTMLPreElement>("#terminal");
 const activityEl = requireElement<HTMLPreElement>("#activity-log");
+const reviewLogEl = requireElement<HTMLDivElement>("#review-log");
 const workspaceTreeEl = requireElement<HTMLDivElement>("#workspace-tree");
 const fileTitleEl = requireElement<HTMLHeadingElement>("#file-title");
 const fileSubtitleEl = requireElement<HTMLParagraphElement>("#file-subtitle");
@@ -72,6 +78,8 @@ let assistantBlockOpen = false;
 let activeFilePath: string | undefined;
 let fileEditorDirty = false;
 let workspaceEntries: WorkspaceTreeEntry[] = [];
+let reviewEntries: ReviewEntry[] = [];
+let activeAssistantReviewId: string | undefined;
 
 function readApiKey(): string {
   return localStorage.getItem(STORAGE_KEYS.apiKey) ?? "";
@@ -107,6 +115,23 @@ function persistTerminal(content: string): void {
 
 function persistActivity(content: string): void {
   localStorage.setItem(STORAGE_KEYS.activity, content);
+}
+
+function persistReviewEntries(entries: ReviewEntry[]): void {
+  localStorage.setItem(STORAGE_KEYS.review, JSON.stringify(entries));
+}
+
+function restoreReviewEntries(): ReviewEntry[] {
+  const raw = localStorage.getItem(STORAGE_KEYS.review);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ReviewEntry[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function setStatus(label: string, tone: "idle" | "busy" | "error" = "idle"): void {
@@ -160,6 +185,122 @@ function setMobileView(view: MobileView): void {
 function focusPromptInput(): void {
   promptInput.focus();
   promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+}
+
+function renderReviewLog(): void {
+  reviewLogEl.replaceChildren();
+
+  if (reviewEntries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "review-empty";
+    empty.textContent = "Review timeline will appear here.";
+    reviewLogEl.append(empty);
+    return;
+  }
+
+  for (const entry of reviewEntries) {
+    const card = document.createElement("article");
+    card.className = `review-entry review-entry-${entry.kind}`;
+
+    const meta = document.createElement("div");
+    meta.className = "review-entry-meta";
+
+    if (entry.kind === "user" || entry.kind === "assistant") {
+      meta.textContent = entry.kind === "user" ? "You" : "Assistant";
+      const bubble = document.createElement("div");
+      bubble.className = "review-bubble";
+      bubble.textContent = entry.text || (entry.kind === "assistant" ? "…" : "");
+      card.append(meta, bubble);
+    } else if (entry.kind === "shell") {
+      meta.textContent = "Shell";
+
+      const command = document.createElement("pre");
+      command.className = "review-shell-command";
+      command.textContent = `$ ${entry.command}`;
+
+      const output = document.createElement("pre");
+      output.className = "review-shell-output";
+      if (entry.pending) {
+        output.textContent = entry.output || "(running...)";
+      } else {
+        output.textContent = entry.output || "(no output)";
+      }
+
+      card.append(meta, command, output);
+
+      if (entry.exitCode !== null && entry.exitCode !== 0) {
+        const badge = document.createElement("span");
+        badge.className = "review-status";
+        badge.textContent = `exit ${entry.exitCode}`;
+        card.append(badge);
+      }
+    } else if (entry.kind === "notice") {
+      meta.textContent = entry.tone === "error" ? "Error" : "Notice";
+      card.dataset.tone = entry.tone;
+      const bubble = document.createElement("div");
+      bubble.className = "review-bubble";
+      bubble.textContent = entry.text;
+      card.append(meta, bubble);
+    }
+
+    reviewLogEl.append(card);
+  }
+
+  reviewLogEl.scrollTop = reviewLogEl.scrollHeight;
+}
+
+function syncReviewLog(): void {
+  persistReviewEntries(reviewEntries);
+  renderReviewLog();
+}
+
+function addReviewEntry(entry: ReviewEntry): string {
+  reviewEntries.push(entry);
+  syncReviewLog();
+  return entry.id;
+}
+
+function addReviewMessage(kind: "user" | "assistant", text: string): string {
+  return addReviewEntry({
+    id: crypto.randomUUID(),
+    kind,
+    text,
+  });
+}
+
+function addReviewNotice(text: string, tone: "info" | "error" = "info"): string {
+  return addReviewEntry({
+    id: crypto.randomUUID(),
+    kind: "notice",
+    text,
+    tone,
+  });
+}
+
+function addReviewShell(command: string): string {
+  return addReviewEntry({
+    id: crypto.randomUUID(),
+    kind: "shell",
+    source: "user",
+    command,
+    output: "",
+    exitCode: null,
+    pending: true,
+  });
+}
+
+function updateReviewEntry(id: string, update: (entry: ReviewEntry) => void): void {
+  const entry = reviewEntries.find((candidate) => candidate.id === id);
+  if (!entry) {
+    return;
+  }
+  update(entry);
+  syncReviewLog();
+}
+
+function resetReviewLog(entries: ReviewEntry[] = []): void {
+  reviewEntries = entries;
+  syncReviewLog();
 }
 
 function appendTerminal(text: string): void {
@@ -329,23 +470,40 @@ async function runManualShell(command: string): Promise<void> {
   setStatus("Shell", "busy");
   setBusy(true);
   appendTerminal(`\n$ ${command}\n`);
+  const reviewEntryId = addReviewShell(command);
+  let reviewOutput = "";
+  let reviewExitCode: number | null = null;
   try {
     const result = await shell.execute(command);
     if (result.stdout) {
       appendTerminal(result.stdout.endsWith("\n") ? result.stdout : `${result.stdout}\n`);
+      reviewOutput += result.stdout;
     }
     if (result.stderr) {
       appendTerminal(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`);
+      reviewOutput += `${reviewOutput ? "\n" : ""}${result.stderr}`;
     }
     if (result.exitCode !== 0) {
       appendTerminal(`[exit ${result.exitCode}]\n`);
     }
+    reviewExitCode = result.exitCode;
   } catch (error) {
-    appendTerminal(`[shell error] ${error instanceof Error ? error.message : String(error)}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    appendTerminal(`[shell error] ${message}\n`);
     setStatus("Shell error", "error");
+    reviewOutput = message;
+    reviewExitCode = 1;
   } finally {
     setBusy(false);
   }
+  updateReviewEntry(reviewEntryId, (entry) => {
+    if (entry.kind !== "shell") {
+      return;
+    }
+    entry.output = reviewOutput;
+    entry.exitCode = reviewExitCode;
+    entry.pending = false;
+  });
   await refreshWorkspaceTree();
   setStatus("Idle", "idle");
 }
@@ -359,16 +517,25 @@ function wireAgent(agentInstance: Agent): void {
 
     if (shouldOpenAssistantBlock(event)) {
       assistantBlockOpen = true;
+      activeAssistantReviewId = addReviewMessage("assistant", "");
       appendActivity("\nassistant> ");
     }
 
     const delta = formatAssistantDelta(event);
     if (delta) {
       appendActivity(delta);
+      if (activeAssistantReviewId) {
+        updateReviewEntry(activeAssistantReviewId, (entry) => {
+          if (entry.kind === "assistant") {
+            entry.text += delta;
+          }
+        });
+      }
     }
 
     if (shouldCloseAssistantBlock(event) && assistantBlockOpen) {
       assistantBlockOpen = false;
+      activeAssistantReviewId = undefined;
       appendActivity("\n");
     }
 
@@ -393,6 +560,7 @@ async function submitPrompt(prompt: string): Promise<void> {
     return;
   }
   if (!readApiKey()) {
+    addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
     appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
     setStatus("Missing API key", "error");
     if (isMobileViewport()) {
@@ -405,6 +573,7 @@ async function submitPrompt(prompt: string): Promise<void> {
   if (isMobileViewport()) {
     setMobileView("console");
   }
+  addReviewMessage("user", prompt);
   appendActivity(`\nuser> ${prompt}\n`);
   promptInput.value = "";
   updateCommandBarState();
@@ -414,8 +583,10 @@ async function submitPrompt(prompt: string): Promise<void> {
   } catch (error) {
     if (assistantBlockOpen) {
       assistantBlockOpen = false;
+      activeAssistantReviewId = undefined;
       appendActivity("\n");
     }
+    addReviewNotice(error instanceof Error ? error.message : String(error), "error");
     appendActivity(`[agent error] ${error instanceof Error ? error.message : String(error)}\n`);
     setStatus("Agent error", "error");
     setBusy(false);
@@ -456,6 +627,8 @@ async function bootstrap(): Promise<void> {
   populateModelOptions();
   resetTerminal(localStorage.getItem(STORAGE_KEYS.terminal) ?? "");
   resetActivity(localStorage.getItem(STORAGE_KEYS.activity) ?? "");
+  reviewEntries = restoreReviewEntries();
+  renderReviewLog();
   if (!terminalEl.textContent) {
     appendTerminal("just-pi ready. Configure an OpenRouter key, inspect the workspace, then prompt the agent.\n");
   }
@@ -517,6 +690,7 @@ clearTranscriptButton.addEventListener("click", () => {
   localStorage.removeItem("just-pi.messages");
   resetTerminal("Transcript cleared.\n");
   resetActivity("Agent activity cleared.\n");
+  resetReviewLog();
   setStatus("Idle", "idle");
 });
 
@@ -543,6 +717,7 @@ promptForm.addEventListener("submit", async (event) => {
 
 promptStop.addEventListener("click", () => {
   agent?.abort();
+  addReviewNotice("Agent abort requested.");
   appendActivity("\n[agent] abort requested.\n");
 });
 
