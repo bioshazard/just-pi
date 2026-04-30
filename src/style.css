@@ -10,6 +10,16 @@
     sans-serif;
   background: #0b1020;
   color: #e6edf7;
+  --app-width: min(1180px, 100vw);
+  --app-padding: clamp(0.65rem, 1vw, 0.9rem);
+  --panel-padding: 0.85rem;
+  --panel-gap: 0.75rem;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
 }
 
 * {
@@ -19,6 +29,8 @@
 body {
   margin: 0;
   min-height: 100vh;
+  display: flex;
+  justify-content: center;
   background:
     radial-gradient(circle at top left, rgba(90, 111, 255, 0.22), transparent 28%),
     radial-gradient(circle at top right, rgba(0, 196, 140, 0.12), transparent 24%),
@@ -68,14 +80,18 @@ textarea {
 }
 
 textarea {
-  resize: vertical;
-  min-height: 8rem;
+  resize: none;
+  min-height: 0;
 }
 
 .app {
-  width: min(1320px, calc(100vw - 2rem));
-  margin: 0 auto;
-  padding: 1.5rem 0 2rem;
+  width: var(--app-width);
+  height: 100vh;
+  padding: var(--app-padding);
+  display: grid;
+  gap: var(--panel-gap);
+  grid-template-rows: auto auto minmax(0, 1fr) minmax(170px, 0.42fr);
+  overflow: hidden;
 }
 
 .hero,
@@ -85,21 +101,20 @@ textarea {
 .input-grid,
 .panel-header {
   display: grid;
-  gap: 1rem;
+  gap: var(--panel-gap);
 }
 
 .hero {
   grid-template-columns: 1fr auto;
-  align-items: end;
-  margin-bottom: 1rem;
+  align-items: center;
 }
 
 .eyebrow {
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.15rem;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: #90a7ff;
-  font-size: 0.76rem;
+  font-size: 0.68rem;
 }
 
 h1,
@@ -109,22 +124,24 @@ h2,
 }
 
 h1 {
-  font-size: clamp(2rem, 4vw, 3.4rem);
+  font-size: clamp(1.55rem, 2.8vw, 2.4rem);
+  line-height: 0.95;
 }
 
 h2 {
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
 .hero-copy {
-  margin-top: 0.5rem;
-  max-width: 60ch;
+  margin-top: 0.3rem;
+  max-width: 52ch;
   color: #b4c1dc;
+  font-size: 0.92rem;
 }
 
 .status-card {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.55rem;
   align-items: center;
 }
 
@@ -133,10 +150,10 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.4rem;
-  padding: 0.55rem 0.85rem;
+  min-height: 2.1rem;
+  padding: 0.42rem 0.72rem;
   border-radius: 999px;
-  font-size: 0.92rem;
+  font-size: 0.84rem;
 }
 
 .status-chip {
@@ -161,11 +178,9 @@ h2 {
 .panel {
   background: rgba(10, 15, 30, 0.78);
   backdrop-filter: blur(16px);
-  padding: 1rem;
-}
-
-.controls {
-  margin-bottom: 1rem;
+  padding: var(--panel-padding);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .control-grid {
@@ -179,38 +194,41 @@ h2 {
 
 .field span {
   color: #b8c5df;
-  font-size: 0.92rem;
+  font-size: 0.86rem;
 }
 
 .button-row {
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  justify-content: start;
-  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  margin-top: 0.65rem;
 }
 
 .main-grid {
   grid-template-columns: minmax(0, 1.8fr) minmax(300px, 0.9fr);
-  margin-bottom: 1rem;
+  min-height: 0;
 }
 
 .input-grid {
   grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+  min-height: 0;
 }
 
 .panel-header {
   grid-template-columns: 1fr;
   align-items: center;
-  margin-bottom: 0.85rem;
+  margin-bottom: 0.65rem;
 }
 
 .terminal,
 .workspace-tree {
   margin: 0;
-  min-height: 22rem;
-  max-height: 32rem;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
-  padding: 1rem;
+  padding: 0.85rem;
   border-radius: 12px;
   border: 1px solid rgba(142, 158, 196, 0.14);
   background: rgba(4, 7, 16, 0.9);
@@ -229,9 +247,33 @@ h2 {
 
 .input-panel {
   display: grid;
+  min-height: 0;
+}
+
+#prompt-form {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+#prompt-input {
+  height: 100%;
+}
+
+#shell-form {
+  align-content: start;
+  grid-template-rows: auto auto auto;
+}
+
+.main-grid > *,
+.input-grid > * {
+  min-height: 0;
 }
 
 @media (max-width: 980px) {
+  html,
+  body {
+    overflow: auto;
+  }
+
   .hero,
   .main-grid,
   .input-grid,
@@ -239,8 +281,15 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .button-row {
-    grid-auto-flow: row;
-    grid-auto-columns: unset;
+  .app {
+    height: auto;
+    min-height: 100vh;
+    grid-template-rows: auto auto auto auto;
+    overflow: visible;
+  }
+
+  .terminal,
+  .workspace-tree {
+    min-height: 18rem;
   }
 }
