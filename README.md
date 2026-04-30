@@ -20,6 +20,12 @@ npm run dev
 npm run build
 ```
 
+## Deploy to GitHub Pages
+
+This repo includes a GitHub Actions workflow that builds `dist/` and deploys it to GitHub Pages on every push to `master`.
+
+If the site does not publish on the first run, set the repository's **Pages** source to **GitHub Actions** in GitHub settings, then rerun the workflow.
+
 ## Usage
 
 1. Open the app in a modern browser with OPFS support.
