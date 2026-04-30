@@ -143,20 +143,20 @@ textarea {
   grid-area: hero;
   grid-template-columns: 1fr auto;
   align-items: center;
+  min-height: 0;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
 }
 
 .hero-side {
-  display: grid;
-  justify-items: end;
+  display: flex;
+  align-items: center;
   gap: 0.55rem;
-}
-
-.eyebrow {
-  margin: 0 0 0.15rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: #90a7ff;
-  font-size: 0.68rem;
 }
 
 h1,
@@ -166,8 +166,9 @@ h2,
 }
 
 h1 {
-  font-size: clamp(1.55rem, 2.8vw, 2.4rem);
-  line-height: 0.95;
+  font-size: clamp(1.3rem, 2vw, 1.7rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
 }
 
 h2 {
@@ -175,17 +176,18 @@ h2 {
 }
 
 .hero-copy {
-  margin-top: 0.3rem;
-  max-width: 52ch;
-  color: #b4c1dc;
-  font-size: 0.92rem;
+  margin: 0;
+  max-width: 42ch;
+  color: #9fb0d6;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .status-card {
   display: flex;
   gap: 0.55rem;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
@@ -194,10 +196,10 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.1rem;
-  padding: 0.42rem 0.72rem;
+  min-height: 1.9rem;
+  padding: 0.32rem 0.62rem;
   border-radius: 999px;
-  font-size: 0.84rem;
+  font-size: 0.78rem;
 }
 
 .status-chip {
@@ -223,14 +225,14 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2rem;
-  padding: 0.42rem 0.78rem;
+  min-height: 1.9rem;
+  padding: 0.32rem 0.72rem;
   border: 1px solid rgba(142, 158, 196, 0.2);
   border-radius: 999px;
   background: rgba(10, 15, 30, 0.7);
   color: #d9e3fb;
   text-decoration: none;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   transition:
     transform 140ms ease,
     border-color 140ms ease,
@@ -737,11 +739,19 @@ h2 {
   }
 
   .hero-side {
-    justify-items: stretch;
+    gap: 0.45rem;
   }
 
   .status-card {
     justify-content: flex-start;
+  }
+
+  .brand-lockup {
+    gap: 0.55rem;
+  }
+
+  h1 {
+    font-size: 1.25rem;
   }
 
   .button-row {
