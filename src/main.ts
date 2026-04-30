@@ -89,6 +89,10 @@ function isGitHubPagesHost(): boolean {
   return window.location.hostname.endsWith(".github.io");
 }
 
+function isMobileViewport(): boolean {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
 function readMobileView(): MobileView {
   const stored = localStorage.getItem(STORAGE_KEYS.mobileView);
   if (stored === "settings" || stored === "command" || stored === "console" || stored === "workspace") {
@@ -153,6 +157,11 @@ function setMobileView(view: MobileView): void {
   }
 }
 
+function focusPromptInput(): void {
+  promptInput.focus();
+  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+}
+
 function appendTerminal(text: string): void {
   terminalEl.textContent += text;
   persistTerminal(terminalEl.textContent);
@@ -208,6 +217,9 @@ async function openWorkspaceFile(path: string, options: { skipDirtyCheck?: boole
     }
   }
 
+  if (isMobileViewport()) {
+    setMobileView("workspace");
+  }
   await loadWorkspaceFile(path);
   renderWorkspaceTree();
 }
@@ -305,6 +317,12 @@ function saveSettings(): void {
   }
   appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
   updateOnboardingState();
+  if (isMobileViewport()) {
+    setMobileView(hasSavedApiKey() ? "command" : "settings");
+    if (hasSavedApiKey()) {
+      focusPromptInput();
+    }
+  }
 }
 
 async function runManualShell(command: string): Promise<void> {
@@ -357,6 +375,9 @@ function wireAgent(agentInstance: Agent): void {
     if (event.type === "agent_start") {
       setStatus("Running", "busy");
       setBusy(true);
+      if (isMobileViewport()) {
+        setMobileView("console");
+      }
     }
 
     if (event.type === "agent_end") {
@@ -374,10 +395,16 @@ async function submitPrompt(prompt: string): Promise<void> {
   if (!readApiKey()) {
     appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
     setStatus("Missing API key", "error");
+    if (isMobileViewport()) {
+      setMobileView("settings");
+    }
     return;
   }
 
   updateAgentConfiguration(agent, readModelId(), shell);
+  if (isMobileViewport()) {
+    setMobileView("console");
+  }
   appendActivity(`\nuser> ${prompt}\n`);
   promptInput.value = "";
   updateCommandBarState();
@@ -411,6 +438,9 @@ async function submitCommandBar(): Promise<void> {
 
     promptInput.value = "";
     updateCommandBarState();
+    if (isMobileViewport()) {
+      setMobileView("console");
+    }
     await runManualShell(command);
     return;
   }
@@ -538,8 +568,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-quick-command]").forEach((bu
     setMobileView("command");
     promptInput.value = command;
     updateCommandBarState();
-    promptInput.focus();
-    promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+    focusPromptInput();
   });
 });
 
@@ -548,6 +577,9 @@ for (const button of mobileTabButtons) {
     const view = button.dataset.mobileTarget;
     if (view === "settings" || view === "command" || view === "console" || view === "workspace") {
       setMobileView(view);
+      if (view === "command") {
+        focusPromptInput();
+      }
     }
   });
 }

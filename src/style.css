@@ -591,7 +591,11 @@ h2 {
   }
 
   .console-grid {
-    grid-template-rows: minmax(10rem, auto) minmax(10rem, auto);
+    grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  }
+
+  .console-section-activity {
+    order: -1;
   }
 
   #prompt-form {
@@ -602,9 +606,12 @@ h2 {
     min-height: 6.5rem;
   }
 
-  .terminal,
   .activity-log {
-    min-height: 10rem;
+    min-height: 12rem;
+  }
+
+  .terminal {
+    min-height: 8rem;
   }
 
   .workspace-tree {
