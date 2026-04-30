@@ -22,8 +22,11 @@ const STORAGE_KEYS = {
   modelId: "just-pi.model-id",
   terminal: "just-pi.terminal",
   activity: "just-pi.activity",
+  mobileView: "just-pi.mobile-view",
   shellCwd: "just-pi.shell-cwd",
 } as const;
+
+type MobileView = "command" | "console" | "workspace";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -33,6 +36,7 @@ function requireElement<T extends Element>(selector: string): T {
   return element;
 }
 
+const appEl = requireElement<HTMLDivElement>("#app");
 const terminalEl = requireElement<HTMLPreElement>("#terminal");
 const activityEl = requireElement<HTMLPreElement>("#activity-log");
 const workspaceTreeEl = requireElement<HTMLDivElement>("#workspace-tree");
@@ -58,6 +62,7 @@ const saveSettingsButton = requireElement<HTMLButtonElement>("#save-settings");
 const clearTranscriptButton = requireElement<HTMLButtonElement>("#clear-transcript");
 const resetWorkspaceButton = requireElement<HTMLButtonElement>("#reset-workspace");
 const refreshWorkspaceButton = requireElement<HTMLButtonElement>("#refresh-workspace");
+const mobileTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-mobile-target]"));
 
 const workspace = new OpfsWorkspace();
 const shell = new ShellRuntime(workspace, STORAGE_KEYS.shellCwd);
@@ -82,6 +87,11 @@ function hasSavedApiKey(): boolean {
 
 function isGitHubPagesHost(): boolean {
   return window.location.hostname.endsWith(".github.io");
+}
+
+function readMobileView(): MobileView {
+  const stored = localStorage.getItem(STORAGE_KEYS.mobileView);
+  return stored === "console" || stored === "workspace" ? stored : "command";
 }
 
 function persistTerminal(content: string): void {
@@ -127,6 +137,17 @@ function updateOnboardingState(): void {
   onboardingTextEl.innerHTML = isGitHubPagesHost()
     ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; <code>!</code> shell commands already work without one."
     : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; <code>!</code> shell commands already work without one.";
+}
+
+function setMobileView(view: MobileView): void {
+  appEl.dataset.mobileView = view;
+  localStorage.setItem(STORAGE_KEYS.mobileView, view);
+
+  for (const button of mobileTabButtons) {
+    const active = button.dataset.mobileTarget === view;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
 }
 
 function appendTerminal(text: string): void {
@@ -420,6 +441,7 @@ async function bootstrap(): Promise<void> {
   wireAgent(agent);
   setStatus("Idle", "idle");
   setBusy(false);
+  setMobileView(readMobileView());
   updateCommandBarState();
   updateOnboardingState();
   await refreshWorkspaceTree();
@@ -510,11 +532,21 @@ document.querySelectorAll<HTMLButtonElement>("[data-quick-command]").forEach((bu
     if (!command) {
       return;
     }
+    setMobileView("command");
     promptInput.value = command;
     updateCommandBarState();
     promptInput.focus();
     promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
   });
 });
+
+for (const button of mobileTabButtons) {
+  button.addEventListener("click", () => {
+    const view = button.dataset.mobileTarget;
+    if (view === "command" || view === "console" || view === "workspace") {
+      setMobileView(view);
+    }
+  });
+}
 
 void bootstrap();

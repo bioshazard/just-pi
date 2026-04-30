@@ -211,6 +211,21 @@ h2 {
   grid-area: controls;
 }
 
+.mobile-nav {
+  display: none;
+}
+
+.mobile-tab {
+  border: 1px solid rgba(142, 158, 196, 0.18);
+  background: rgba(10, 15, 30, 0.82);
+  color: #c9d6f3;
+}
+
+.mobile-tab.is-active {
+  background: linear-gradient(180deg, #4a6cf7, #3653c6);
+  color: #f8fbff;
+}
+
 .field {
   display: grid;
   gap: 0.45rem;
@@ -495,7 +510,8 @@ h2 {
 @media (max-width: 980px) {
   html,
   body {
-    overflow: auto;
+    height: 100%;
+    overflow: hidden;
   }
 
   body {
@@ -511,15 +527,15 @@ h2 {
   }
 
   .app {
-    height: auto;
-    min-height: 100vh;
+    height: 100svh;
+    min-height: 100svh;
     grid-template-areas:
       "hero"
       "controls"
-      "input"
-      "main";
-    grid-template-rows: auto auto auto auto;
-    overflow: visible;
+      "nav"
+      "view";
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    overflow: hidden;
   }
 
   .hero-copy {
@@ -536,8 +552,33 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .mobile-nav {
+    grid-area: nav;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
   .secondary-button {
     width: 100%;
+  }
+
+  .main-grid,
+  .input-grid {
+    grid-area: view;
+    min-height: 0;
+  }
+
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app[data-mobile-view="command"] .main-grid,
+  .app[data-mobile-view="console"] .input-grid,
+  .app[data-mobile-view="workspace"] .input-grid,
+  .app[data-mobile-view="console"] .workspace-panel,
+  .app[data-mobile-view="workspace"] .console-panel {
+    display: none;
   }
 
   .console-grid {
