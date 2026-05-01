@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
 import {
   AssistantRuntimeProvider,
@@ -13,7 +13,7 @@ import type { ShellRuntime } from "./shell";
 
 import { AssistantCommandBar, type AssistantCommandBarHandle } from "./AssistantCommandBar";
 import { AssistantReviewPane, readStoredAssistantMessages } from "./AssistantReviewPane";
-import { TEXT_ATTACHMENT_ACCEPT, WorkspaceTextAttachmentAdapter } from "./assistant-attachments";
+import { WORKSPACE_UPLOAD_ACCEPT } from "./assistant-attachments";
 import {
   formatAssistantDelta,
   formatToolEvent,
@@ -22,7 +22,7 @@ import {
   shouldCloseAssistantBlock,
   shouldOpenAssistantBlock,
 } from "./agent-session-ui";
-import { OpfsWorkspace, basename, type WorkspaceTreeEntry } from "./opfs";
+import { OpfsWorkspace, basename, normalizePath, type WorkspaceTreeEntry } from "./opfs";
 
 const STORAGE_KEYS = {
   apiKey: "just-pi.api-key",
@@ -35,7 +35,7 @@ const STORAGE_KEYS = {
 } as const;
 
 type StatusTone = "idle" | "busy" | "error";
-type AppRoute = "/setup" | "/drive" | "/review" | "/files";
+type AppRoute = "/setup" | "/session" | "/files";
 type ReviewEntry =
   | { id: string; kind: "user" | "assistant"; text: string }
   | { id: string; kind: "shell"; source: "user"; command: string; output: string; exitCode: number | null; pending: boolean }
@@ -129,7 +129,7 @@ const QUICK_ACTIONS = [
   { label: "Scaffold starter project", value: "Create a tiny HTML, CSS, and JavaScript starter project in this workspace." },
 ] as const;
 
-const APP_ROUTES = ["/setup", "/drive", "/review", "/files"] as const satisfies readonly AppRoute[];
+const APP_ROUTES = ["/setup", "/session", "/files"] as const satisfies readonly AppRoute[];
 const DEFAULT_TERMINAL_TEXT = "just-pi ready.\n";
 const DEFAULT_ACTIVITY_TEXT = "Tool stream ready.\n";
 
@@ -222,6 +222,7 @@ export function App() {
   const terminalRef = useRef<HTMLPreElement>(null);
   const activityRef = useRef<HTMLPreElement>(null);
   const reviewLogRef = useRef<HTMLDivElement>(null);
+  const workspaceUploadInputRef = useRef<HTMLInputElement>(null);
   const [route, setRoute] = useHashLocation();
 
   const [savedApiKey, setSavedApiKey] = useState(savedApiKeyInitial);
@@ -270,8 +271,6 @@ export function App() {
     }),
     [],
   );
-
-  const attachmentAdapter = useMemo(() => new WorkspaceTextAttachmentAdapter(), []);
 
   useEffect(() => {
     return () => {
@@ -331,7 +330,7 @@ export function App() {
   );
 
   const hasSavedApiKey = savedApiKey.trim().length > 0;
-  const defaultRoute: AppRoute = hasSavedApiKey ? "/drive" : "/setup";
+  const defaultRoute: AppRoute = "/session";
   const currentRoute: AppRoute = isAppRoute(route) ? route : defaultRoute;
 
   useEffect(() => {
@@ -352,7 +351,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (currentRoute !== "/drive" || !pendingDriveText) {
+    if (currentRoute !== "/session" || !pendingDriveText) {
       return;
     }
     const frameId = window.requestAnimationFrame(() => {
@@ -489,6 +488,89 @@ export function App() {
     appendTerminal(`\n[workspace] saved ${path}\n`);
     await refreshWorkspaceTree();
   }, [appendTerminal, fileEditorContent, refreshWorkspaceTree, workspace]);
+
+  const downloadActiveFile = useCallback(async () => {
+    const path = activeFilePathRef.current;
+    if (!path) {
+      return;
+    }
+    if (fileEditorDirtyRef.current) {
+      const shouldContinue = window.confirm("Download the last saved OPFS version? Unsaved editor changes will not be included.");
+      if (!shouldContinue) {
+        return;
+      }
+    }
+
+    setStatus("Downloading", "busy");
+    const bytes = await workspace.readFileBuffer(path);
+    const downloadBytes = new Uint8Array(bytes.byteLength);
+    downloadBytes.set(bytes);
+    const url = URL.createObjectURL(new Blob([downloadBytes]));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = basename(path);
+    link.style.display = "none";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 0);
+    appendTerminal(`\n[workspace] downloaded ${path}\n`);
+    setStatus("Idle", "idle");
+  }, [appendTerminal, setStatus, workspace]);
+
+  const uploadWorkspaceFiles = useCallback(
+    async (files: readonly File[]) => {
+      if (files.length === 0) {
+        return;
+      }
+
+      setStatus("Uploading", "busy");
+
+      const targetPaths = files.map((file) => normalizePath(`/${file.name}`));
+      const existingPaths: string[] = [];
+      for (const path of targetPaths) {
+        if (await workspace.exists(path)) {
+          existingPaths.push(path);
+        }
+      }
+
+      if (existingPaths.length > 0) {
+        const shouldReplace = window.confirm(
+          existingPaths.length === 1
+            ? `Replace existing file ${existingPaths[0]}?`
+            : `Replace these existing files?\n${existingPaths.join("\n")}`,
+        );
+        if (!shouldReplace) {
+          return;
+        }
+      }
+
+      for (const [index, file] of files.entries()) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const path = targetPaths[index]!;
+        await workspace.writeFile(path, bytes);
+        appendTerminal(`\n[workspace] uploaded ${path}\n`);
+      }
+
+      await refreshWorkspaceTree();
+      if (files.length === 1 && !fileEditorDirtyRef.current) {
+        await loadWorkspaceFile(targetPaths[0]!);
+      }
+      setStatus("Idle", "idle");
+    },
+    [appendTerminal, loadWorkspaceFile, refreshWorkspaceTree, setStatus, workspace],
+  );
+
+  const handleWorkspaceUploadInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      event.target.value = "";
+      void uploadWorkspaceFiles(files);
+    },
+    [uploadWorkspaceFiles],
+  );
 
   const getShell = useCallback(async () => {
     if (shellRef.current) {
@@ -687,7 +769,7 @@ export function App() {
           if (event.type === "agent_start") {
             setStatus("Running", "busy");
             setIsBusy(true);
-            navigate("/review");
+            navigate("/session");
           }
 
           if (event.type === "agent_end") {
@@ -748,7 +830,7 @@ export function App() {
     }
 
     appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
-    navigate(nextApiKey ? "/drive" : "/setup");
+    navigate(nextApiKey ? "/session" : "/setup");
     if (nextApiKey) {
       window.requestAnimationFrame(() => {
         focusPromptInput();
@@ -820,7 +902,7 @@ export function App() {
 
   const handleBeforeAgentSubmit = useCallback(
     (prompt: string) => {
-      navigate("/review");
+      navigate("/session");
       appendActivity(`\nuser> ${prompt}\n`);
     },
     [appendActivity, navigate],
@@ -828,7 +910,7 @@ export function App() {
 
   const handleShellSubmit = useCallback(
     async (command: string) => {
-      navigate("/review");
+      navigate("/session");
       await runManualShell(command);
     },
     [navigate, runManualShell],
@@ -839,15 +921,6 @@ export function App() {
     addReviewNotice("Agent abort requested.");
     appendActivity("\n[agent] abort requested.\n");
   }, [addReviewNotice, appendActivity]);
-
-  const handleAttachmentError = useCallback(
-    (message: string) => {
-      addReviewNotice(message, "error");
-      appendActivity(`\n[attachment error] ${message}\n`);
-      setStatus("Attachment error", "error");
-    },
-    [addReviewNotice, appendActivity, setStatus],
-  );
 
   const resetWorkspace = useCallback(async () => {
     const confirmed = window.confirm("Reset the OPFS workspace? This removes all files created in just-pi.");
@@ -921,7 +994,6 @@ export function App() {
       runtimeOptions={{
         adapters: {
           suggestion: suggestionAdapter,
-          attachments: attachmentAdapter,
         },
       }}
     >
@@ -940,6 +1012,15 @@ export function App() {
                 {cwd}
               </span>
             </div>
+            <button
+              type="button"
+              className={`utility-link${currentRoute === "/setup" ? " is-active" : ""}`}
+              onClick={() => {
+                navigate("/setup");
+              }}
+            >
+              Setup
+            </button>
             <a className="repo-link" href="https://github.com/bioshazard/just-pi" target="_blank" rel="noreferrer">
               GitHub
             </a>
@@ -948,9 +1029,7 @@ export function App() {
 
         <nav className="surface-nav" aria-label="Primary surfaces">
           {([
-            ["/setup", "Setup"],
-            ["/drive", "Drive"],
-            ["/review", "Review"],
+            ["/session", "Session"],
             ["/files", "Files"],
           ] as const).map(([path, label]) => (
             <button
@@ -961,7 +1040,7 @@ export function App() {
               aria-pressed={currentRoute === path}
               onClick={() => {
                 navigate(path);
-                if (path === "/drive") {
+                if (path === "/session") {
                   window.requestAnimationFrame(() => {
                     focusPromptInput();
                   });
@@ -996,7 +1075,7 @@ export function App() {
               </div>
 
               {hasSavedApiKey && !isSetupExpanded ? (
-                <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
+                <p className="setup-summary">Run the session from one lane. Transcript, tools, and shell output stay together.</p>
               ) : (
                 <>
                   <div className="control-grid">
@@ -1055,13 +1134,13 @@ export function App() {
                   </div>
 
                   {hasSavedApiKey ? (
-                    <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
+                    <p className="setup-summary">Run the session from one lane. Transcript, tools, and shell output stay together.</p>
                   ) : (
                     <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
                       <div>
                         <h3 id="onboarding-title">Quick start</h3>
                         <p id="onboarding-text" className="panel-copy">
-                          Save a key for agent prompts, or start now with <code>!</code> in Drive.
+                          Save a key for agent prompts, or start now with <code>!</code> in Session.
                         </p>
                       </div>
                       <div className="button-row onboarding-actions">
@@ -1071,7 +1150,7 @@ export function App() {
                             type="button"
                             className="secondary-button"
                             onClick={() => {
-                              navigate("/drive");
+                              navigate("/session");
                               setPendingDriveText(action.value);
                             }}
                           >
@@ -1086,38 +1165,16 @@ export function App() {
             </section>
           ) : null}
 
-          {currentRoute === "/drive" ? (
-            <section className="route-drive">
-              <AssistantCommandBar
-                ref={commandBarRef}
-                isReady={isReady}
-                isBusy={isBusy}
-                agentEnabled={hasSavedApiKey}
-                fallbackSuggestions={QUICK_ACTIONS.map((action) => ({
-                  label: action.label,
-                  prompt: action.value,
-                }))}
-                onRunShell={handleShellSubmit}
-                onMissingAgentKey={handleMissingAgentKey}
-                onMissingShellCommand={handleMissingShellCommand}
-                onBeforeAgentSubmit={handleBeforeAgentSubmit}
-                onAbortAgent={handleAbortAgent}
-                onAttachmentError={handleAttachmentError}
-                attachmentAccept={TEXT_ATTACHMENT_ACCEPT}
-              />
-            </section>
-          ) : null}
-
-          {currentRoute === "/review" ? (
-            <section className="panel console-panel">
+          {currentRoute === "/session" ? (
+            <section className="panel session-panel">
               <div className="panel-header surface-header">
                 <div>
-                  <h2>Review</h2>
-                  <p className="panel-copy">Transcript first; raw traces stay collapsed.</p>
+                  <h2>Session</h2>
+                  <p className="panel-copy">Compose, transcript, and traces live together.</p>
                 </div>
               </div>
 
-              <div className="review-stack">
+              <div className="session-review">
                 <AssistantReviewPane
                   storageKey={STORAGE_KEYS.assistantThread}
                   reviewLogId="review-log"
@@ -1125,42 +1182,63 @@ export function App() {
                   supplementalCount={reviewEntries.length}
                   emptyState={
                     <div className="review-empty-state">
-                      <p className="review-empty-title">{hasSavedApiKey ? "Drive to begin." : "Review is waiting on Drive."}</p>
+                      <p className="review-empty-title">{hasSavedApiKey ? "Start the session here." : "Session is ready for shell."}</p>
                       <p className="review-empty-copy">
                         {hasSavedApiKey ? (
-                          <>Review records prompts, tools, and shell output.</>
+                          <>Send a prompt or run a shell command. Everything lands in this same session.</>
                         ) : (
-                          <>Shell commands already land here. Save a key to add agent prompts.</>
+                          <>
+                            Run <code>!</code> commands now, or save a key to enable agent prompts.
+                          </>
                         )}
                       </p>
                     </div>
                   }
-                  supplementalEntries={reviewEntries.map((entry) => (
-                    <ReviewEntryView key={entry.id} entry={entry} />
-                  ))}
-                />
-
-                {hasShellTrace || hasToolTrace ? (
-                  <section className="review-traces" aria-label="Raw traces">
-                    {hasShellTrace ? (
-                      <details className="review-trace">
-                        <summary className="review-trace-summary">Shell trace</summary>
-                        <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
-                          {terminalText}
-                        </pre>
-                      </details>
-                    ) : null}
-                    {hasToolTrace ? (
-                      <details className="review-trace">
-                        <summary className="review-trace-summary">Tool trace</summary>
-                        <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
-                          {activityText}
-                        </pre>
-                      </details>
-                    ) : null}
-                  </section>
-                ) : null}
+                    supplementalEntries={reviewEntries.map((entry) => (
+                      <ReviewEntryView key={entry.id} entry={entry} />
+                    ))}
+                  />
               </div>
+
+              <AssistantCommandBar
+                ref={commandBarRef}
+                title="Compose"
+                description={
+                  <>
+                    Plain text drives the agent. Start with <code>!</code> for shell.
+                  </>
+                }
+                isReady={isReady}
+                isBusy={isBusy}
+                agentEnabled={hasSavedApiKey}
+                onRunShell={handleShellSubmit}
+                onMissingAgentKey={handleMissingAgentKey}
+                onMissingShellCommand={handleMissingShellCommand}
+                onBeforeAgentSubmit={handleBeforeAgentSubmit}
+                onAbortAgent={handleAbortAgent}
+                onUploadWorkspaceFiles={uploadWorkspaceFiles}
+              />
+
+              {hasShellTrace || hasToolTrace ? (
+                <section className="review-traces" aria-label="Raw traces">
+                  {hasShellTrace ? (
+                    <details className="review-trace">
+                      <summary className="review-trace-summary">Shell trace</summary>
+                      <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                        {terminalText}
+                      </pre>
+                    </details>
+                  ) : null}
+                  {hasToolTrace ? (
+                    <details className="review-trace">
+                      <summary className="review-trace-summary">Tool trace</summary>
+                      <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                        {activityText}
+                      </pre>
+                    </details>
+                  ) : null}
+                </section>
+              ) : null}
             </section>
           ) : null}
 
@@ -1198,6 +1276,15 @@ export function App() {
                 </div>
 
                 <section className="file-viewer">
+                  <input
+                    ref={workspaceUploadInputRef}
+                    id="workspace-upload"
+                    type="file"
+                    hidden
+                    multiple
+                    accept={WORKSPACE_UPLOAD_ACCEPT}
+                    onChange={handleWorkspaceUploadInputChange}
+                  />
                   <div className="file-viewer-header">
                     <div>
                       <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "Working set"}</h3>
@@ -1207,6 +1294,19 @@ export function App() {
                     </div>
 
                     <div className="button-row file-actions">
+                      <button
+                        id="file-upload"
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          workspaceUploadInputRef.current?.click();
+                        }}
+                      >
+                        Upload files
+                      </button>
+                      <button id="file-download" type="button" className="secondary-button" disabled={!activeFilePath} onClick={() => void downloadActiveFile()}>
+                        Download file
+                      </button>
                       <button
                         id="file-reload"
                         type="button"

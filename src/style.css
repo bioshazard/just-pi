@@ -237,9 +237,30 @@ h2 {
     background 140ms ease;
 }
 
+.utility-link {
+  min-height: 1.75rem;
+  padding: 0.26rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.18);
+  background: rgba(10, 15, 30, 0.46);
+  color: #b7c5e2;
+  box-shadow: none;
+}
+
+.utility-link.is-active {
+  border-color: rgba(74, 108, 247, 0.28);
+  background: rgba(74, 108, 247, 0.16);
+  color: #f8fbff;
+}
+
 .repo-link:hover {
   border-color: rgba(120, 154, 255, 0.35);
   background: rgba(24, 34, 66, 0.66);
+}
+
+.utility-link:hover {
+  border-color: rgba(120, 154, 255, 0.28);
+  background: rgba(24, 34, 66, 0.58);
 }
 
 .panel {
@@ -277,7 +298,7 @@ h2 {
 .surface-nav {
   grid-area: nav;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.55rem;
 }
 
@@ -326,16 +347,37 @@ h2 {
 
 .route-shell {
   grid-area: view;
+  display: grid;
+  align-content: start;
   min-height: 0;
+  overflow: auto;
+}
+
+.route-shell[data-route="/session"] {
+  overflow: hidden;
 }
 
 .route-shell > * {
   min-height: 0;
 }
 
-.route-drive {
-  display: grid;
-  min-height: 0;
+.route-shell[data-route="/setup"] > .controls {
+  width: min(100%, 980px);
+}
+
+.route-shell[data-route="/session"] > .session-panel {
+  width: 100%;
+  min-height: 100%;
+}
+
+.route-shell[data-route="/files"] {
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.route-shell[data-route="/files"] > .workspace-panel {
+  height: 100%;
+  min-height: 100%;
 }
 
 .panel-header {
@@ -432,9 +474,15 @@ h2 {
   word-break: break-word;
 }
 
-.console-panel,
-.workspace-panel {
+.workspace-panel,
+.session-panel {
   display: grid;
+  align-content: stretch;
+}
+
+.console-panel,
+.session-panel,
+.workspace-panel {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -446,9 +494,32 @@ h2 {
 
 .review-stack {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--panel-gap);
   min-height: 0;
+  align-content: start;
+}
+
+.session-panel {
+  gap: var(--panel-gap);
+  align-content: stretch;
+}
+
+.session-review {
+  display: grid;
+  min-height: 0;
+}
+
+.session-panel .assistant-review-root,
+.session-panel .assistant-review-log {
+  min-height: 0;
+}
+
+.session-panel .review-log {
+  min-height: 0;
+}
+
+.session-panel .input-panel {
+  margin-top: 0;
 }
 
 .review-log {
@@ -469,6 +540,7 @@ h2 {
   display: grid;
   gap: 0.45rem;
   padding: 0.8rem 0.9rem;
+  max-width: 52rem;
   border-radius: 18px;
   border: 1px solid rgba(142, 158, 196, 0.16);
   background: rgba(10, 15, 30, 0.64);
@@ -577,7 +649,6 @@ h2 {
 
 .assistant-review-root {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -843,12 +914,14 @@ h2 {
   grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.6fr);
   gap: var(--panel-gap);
   min-height: 0;
+  height: 100%;
 }
 
 .workspace-tree {
   display: grid;
   align-content: start;
   gap: 0.28rem;
+  min-height: 0;
   white-space: normal;
   font-family:
     Inter,
@@ -896,6 +969,7 @@ h2 {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 0.65rem;
   min-height: 0;
+  height: 100%;
 }
 
 .file-viewer-header {
@@ -960,17 +1034,29 @@ h2 {
 }
 
 #prompt-form {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
 }
 
 #prompt-input {
-  height: 100%;
+  min-height: 10rem;
+  height: auto;
+}
+
+.prompt-input.is-drop-target {
+  border-color: rgba(74, 108, 247, 0.45);
+  background: rgba(20, 32, 66, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(120, 154, 255, 0.22);
 }
 
 .input-footer {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.input-footer-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.75rem;
 }
 
@@ -979,66 +1065,9 @@ h2 {
   gap: 0.2rem;
 }
 
-.command-attachments-row,
-.command-suggestions,
-.command-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.command-attachments-row,
-.command-suggestions {
-  align-items: center;
-}
-
-.command-suggestion,
-.attachment-button {
-  max-width: 100%;
-}
-
-.command-suggestion {
-  justify-content: flex-start;
-  text-align: left;
-}
-
-.command-attachment-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.25rem 0.35rem 0.25rem 0.6rem;
-  border-radius: 999px;
-  border: 1px solid rgba(142, 158, 196, 0.18);
-  background: rgba(142, 158, 196, 0.08);
-  color: #d7e0f6;
-  font-size: 0.78rem;
-}
-
-.command-attachment-chip[data-status="incomplete"] {
-  border-color: rgba(196, 59, 59, 0.26);
-  background: rgba(196, 59, 59, 0.12);
-}
-
-.command-attachment-name {
-  max-width: 16rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-attachment-remove {
-  min-width: 1.75rem;
-  min-height: 1.75rem;
-  padding: 0;
-  border-radius: 999px;
-  border: 1px solid rgba(142, 158, 196, 0.2);
-  background: rgba(4, 7, 16, 0.72);
-  color: #d7e0f6;
-  box-shadow: none;
-}
-
-.command-attachment-remove:hover:not(:disabled) {
-  transform: none;
+.input-actions {
+  margin-top: 0;
+  justify-content: flex-end;
 }
 
 .input-hint {
@@ -1110,8 +1139,9 @@ h2 {
   .route-shell,
   .controls,
   .console-panel,
+  .session-panel,
   .workspace-panel,
-  .route-drive {
+  .session-review {
     min-height: 0;
   }
 
@@ -1122,16 +1152,6 @@ h2 {
   .review-entry-user,
   .review-entry-assistant {
     max-width: 100%;
-  }
-
-  .command-attachments-row,
-  .command-suggestions,
-  .command-attachments {
-    gap: 0.45rem;
-  }
-
-  .command-attachment-name {
-    max-width: 12rem;
   }
 
   #prompt-form {
@@ -1162,8 +1182,7 @@ h2 {
     flex-direction: column;
   }
 
-  .input-panel-header,
-  .input-footer {
+  .input-panel-header {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1172,22 +1191,15 @@ h2 {
     gap: 0.55rem;
   }
 
+  .input-footer-row,
+  .input-footer .button-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .input-panel-header .mode-chip {
     width: auto;
     align-self: flex-start;
-  }
-
-  .command-suggestions {
-    align-items: flex-start;
-  }
-
-  .command-suggestion {
-    width: auto;
-    flex: 0 1 auto;
-  }
-
-  .attachment-button {
-    width: 100%;
   }
 
   .input-hint {
