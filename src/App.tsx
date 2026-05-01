@@ -1,0 +1,929 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import type { Agent } from "@mariozechner/pi-agent-core";
+
+import {
+  OPENROUTER_MODELS,
+  createBrowserAgentSession,
+  formatAssistantDelta,
+  formatToolEvent,
+  getDefaultModelId,
+  getStarterWorkspaceFile,
+  restoreMessages,
+  shouldCloseAssistantBlock,
+  shouldOpenAssistantBlock,
+  updateAgentConfiguration,
+} from "./agent-session";
+import { OpfsWorkspace, basename, type WorkspaceTreeEntry } from "./opfs";
+import { ShellRuntime } from "./shell";
+
+const STORAGE_KEYS = {
+  apiKey: "just-pi.api-key",
+  modelId: "just-pi.model-id",
+  terminal: "just-pi.terminal",
+  activity: "just-pi.activity",
+  review: "just-pi.review",
+  mobileView: "just-pi.mobile-view",
+  shellCwd: "just-pi.shell-cwd",
+} as const;
+
+type StatusTone = "idle" | "busy" | "error";
+type MobileView = "settings" | "command" | "console" | "workspace";
+type ReviewEntry =
+  | { id: string; kind: "user" | "assistant"; text: string }
+  | { id: string; kind: "shell"; source: "user"; command: string; output: string; exitCode: number | null; pending: boolean }
+  | { id: string; kind: "notice"; text: string; tone: "info" | "error" };
+
+interface ReviewEntryViewProps {
+  entry: ReviewEntry;
+}
+
+const QUICK_ACTIONS = [
+  { label: "Try !ls", value: "!ls" },
+  { label: "Summarize workspace", value: "Summarize the current workspace and explain what I can do here." },
+  { label: "Scaffold starter project", value: "Create a tiny HTML, CSS, and JavaScript starter project in this workspace." },
+] as const;
+
+function readStorageText(key: string, fallback = ""): string {
+  return localStorage.getItem(key) ?? fallback;
+}
+
+function readStorageJson<T>(key: string, fallback: T): T {
+  const raw = localStorage.getItem(key);
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function isGitHubPagesHost(): boolean {
+  return window.location.hostname.endsWith(".github.io");
+}
+
+function isMobileViewport(): boolean {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
+function readInitialMobileView(savedApiKey: string): MobileView {
+  const stored = localStorage.getItem(STORAGE_KEYS.mobileView);
+  if (stored === "settings" || stored === "command" || stored === "console" || stored === "workspace") {
+    return stored;
+  }
+  return savedApiKey.trim().length > 0 ? "command" : "settings";
+}
+
+function ReviewEntryView({ entry }: ReviewEntryViewProps) {
+  return (
+    <article
+      className={`review-entry review-entry-${entry.kind}`}
+      data-tone={entry.kind === "notice" ? entry.tone : undefined}
+    >
+      {entry.kind === "user" || entry.kind === "assistant" ? (
+        <>
+          <div className="review-entry-meta">{entry.kind === "user" ? "You" : "Assistant"}</div>
+          <div className="review-bubble">{entry.text || (entry.kind === "assistant" ? "..." : "")}</div>
+        </>
+      ) : null}
+
+      {entry.kind === "shell" ? (
+        <>
+          <div className="review-entry-meta">Command</div>
+          <pre className="review-shell-command">{`$ ${entry.command}`}</pre>
+          <pre className="review-shell-output">
+            {entry.pending ? entry.output || "(running...)" : entry.output || "(no output)"}
+          </pre>
+          {entry.exitCode !== null && entry.exitCode !== 0 ? <span className="review-status">{`exit ${entry.exitCode}`}</span> : null}
+        </>
+      ) : null}
+
+      {entry.kind === "notice" ? (
+        <>
+          <div className="review-entry-meta">{entry.tone === "error" ? "Error" : "Notice"}</div>
+          <div className="review-bubble">{entry.text}</div>
+        </>
+      ) : null}
+    </article>
+  );
+}
+
+export function App() {
+  const savedApiKeyInitial = readStorageText(STORAGE_KEYS.apiKey);
+  const savedModelInitial = readStorageText(STORAGE_KEYS.modelId, getDefaultModelId());
+
+  const workspace = useMemo(() => new OpfsWorkspace(), []);
+  const shell = useMemo(() => new ShellRuntime(workspace, STORAGE_KEYS.shellCwd), [workspace]);
+
+  const agentRef = useRef<Agent | undefined>(undefined);
+  const assistantBlockOpenRef = useRef(false);
+  const activeAssistantReviewIdRef = useRef<string | undefined>(undefined);
+  const savedApiKeyRef = useRef(savedApiKeyInitial);
+  const savedModelIdRef = useRef(savedModelInitial);
+  const activeFilePathRef = useRef<string | undefined>(undefined);
+  const fileEditorDirtyRef = useRef(false);
+
+  const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const terminalRef = useRef<HTMLPreElement>(null);
+  const activityRef = useRef<HTMLPreElement>(null);
+  const reviewLogRef = useRef<HTMLDivElement>(null);
+
+  const [savedApiKey, setSavedApiKey] = useState(savedApiKeyInitial);
+  const [savedModelId, setSavedModelId] = useState(savedModelInitial);
+  const [apiKeyInput, setApiKeyInput] = useState(savedApiKeyInitial);
+  const [modelIdInput, setModelIdInput] = useState(savedModelInitial);
+  const [terminalText, setTerminalText] = useState(() => readStorageText(STORAGE_KEYS.terminal));
+  const [activityText, setActivityText] = useState(() => readStorageText(STORAGE_KEYS.activity));
+  const [reviewEntries, setReviewEntries] = useState<ReviewEntry[]>(() => readStorageJson<ReviewEntry[]>(STORAGE_KEYS.review, []));
+  const [mobileView, setMobileViewState] = useState<MobileView>(() => readInitialMobileView(savedApiKeyInitial));
+  const [statusLabel, setStatusLabel] = useState("Idle");
+  const [statusTone, setStatusTone] = useState<StatusTone>("idle");
+  const [cwd, setCwd] = useState(() => shell.getCwd());
+  const [isBusy, setIsBusy] = useState(false);
+  const [promptValue, setPromptValue] = useState("");
+  const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceTreeEntry[]>([]);
+  const [activeFilePath, setActiveFilePath] = useState<string>();
+  const [fileEditorContent, setFileEditorContent] = useState("");
+  const [fileEditorDirty, setFileEditorDirty] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    savedApiKeyRef.current = savedApiKey;
+  }, [savedApiKey]);
+
+  useEffect(() => {
+    savedModelIdRef.current = savedModelId;
+  }, [savedModelId]);
+
+  useEffect(() => {
+    activeFilePathRef.current = activeFilePath;
+  }, [activeFilePath]);
+
+  useEffect(() => {
+    fileEditorDirtyRef.current = fileEditorDirty;
+  }, [fileEditorDirty]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.terminal, terminalText);
+  }, [terminalText]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.activity, activityText);
+  }, [activityText]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.review, JSON.stringify(reviewEntries));
+  }, [reviewEntries]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.mobileView, mobileView);
+  }, [mobileView]);
+
+  useEffect(() => {
+    terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight });
+  }, [terminalText]);
+
+  useEffect(() => {
+    activityRef.current?.scrollTo({ top: activityRef.current.scrollHeight });
+  }, [activityText]);
+
+  useEffect(() => {
+    reviewLogRef.current?.scrollTo({ top: reviewLogRef.current.scrollHeight });
+  }, [reviewEntries]);
+
+  const setStatus = useCallback(
+    (label: string, tone: StatusTone = "idle") => {
+      setStatusLabel(label);
+      setStatusTone(tone);
+      setCwd(shell.getCwd());
+    },
+    [shell],
+  );
+
+  const setMobileView = useCallback((view: MobileView) => {
+    setMobileViewState(view);
+  }, []);
+
+  const focusPromptInput = useCallback(() => {
+    const element = promptInputRef.current;
+    if (!element) {
+      return;
+    }
+    element.focus();
+    const end = element.value.length;
+    element.setSelectionRange(end, end);
+  }, []);
+
+  const appendTerminal = useCallback((text: string) => {
+    setTerminalText((current) => current + text);
+  }, []);
+
+  const resetTerminal = useCallback((text = "") => {
+    setTerminalText(text);
+  }, []);
+
+  const appendActivity = useCallback((text: string) => {
+    setActivityText((current) => current + text);
+  }, []);
+
+  const resetActivity = useCallback((text = "") => {
+    setActivityText(text);
+  }, []);
+
+  const addReviewEntry = useCallback((entry: ReviewEntry): string => {
+    setReviewEntries((current) => [...current, entry]);
+    return entry.id;
+  }, []);
+
+  const addReviewMessage = useCallback(
+    (kind: "user" | "assistant", text: string) =>
+      addReviewEntry({
+        id: crypto.randomUUID(),
+        kind,
+        text,
+      }),
+    [addReviewEntry],
+  );
+
+  const addReviewNotice = useCallback(
+    (text: string, tone: "info" | "error" = "info") =>
+      addReviewEntry({
+        id: crypto.randomUUID(),
+        kind: "notice",
+        text,
+        tone,
+      }),
+    [addReviewEntry],
+  );
+
+  const addReviewShell = useCallback(
+    (command: string) =>
+      addReviewEntry({
+        id: crypto.randomUUID(),
+        kind: "shell",
+        source: "user",
+        command,
+        output: "",
+        exitCode: null,
+        pending: true,
+      }),
+    [addReviewEntry],
+  );
+
+  const updateReviewEntry = useCallback((entryId: string, updater: (entry: ReviewEntry) => ReviewEntry) => {
+    setReviewEntries((current) => current.map((entry) => (entry.id === entryId ? updater(entry) : entry)));
+  }, []);
+
+  const resetReviewEntries = useCallback((entries: ReviewEntry[] = []) => {
+    setReviewEntries(entries);
+  }, []);
+
+  const ensureStarterWorkspace = useCallback(async () => {
+    if ((await workspace.readdir("/")).length > 0) {
+      return;
+    }
+    const starter = getStarterWorkspaceFile();
+    await workspace.writeFile(starter.path, starter.content);
+  }, [workspace]);
+
+  const loadWorkspaceFile = useCallback(
+    async (path: string) => {
+      const content = await workspace.readText(path);
+      setFileEditorContent(content);
+      setActiveFilePath(path);
+      setFileEditorDirty(false);
+    },
+    [workspace],
+  );
+
+  const refreshWorkspaceTree = useCallback(async () => {
+    const entries = await workspace.listTreeEntries();
+    setWorkspaceEntries(entries);
+    setCwd(shell.getCwd());
+
+    const filePaths = entries.filter((entry) => entry.kind === "file").map((entry) => entry.path);
+    const currentActiveFilePath = activeFilePathRef.current;
+
+    if (currentActiveFilePath && !filePaths.includes(currentActiveFilePath)) {
+      setActiveFilePath(undefined);
+      setFileEditorContent("");
+      setFileEditorDirty(false);
+    }
+
+    const nextPath = currentActiveFilePath && filePaths.includes(currentActiveFilePath) ? currentActiveFilePath : filePaths[0];
+    if (!nextPath) {
+      setActiveFilePath(undefined);
+      setFileEditorContent("");
+      setFileEditorDirty(false);
+      return;
+    }
+
+    if (!currentActiveFilePath || !fileEditorDirtyRef.current) {
+      await loadWorkspaceFile(nextPath);
+    }
+  }, [loadWorkspaceFile, shell, workspace]);
+
+  const openWorkspaceFile = useCallback(
+    async (path: string) => {
+      if (fileEditorDirtyRef.current) {
+        const shouldDiscard = window.confirm("Discard unsaved file changes?");
+        if (!shouldDiscard) {
+          return;
+        }
+      }
+
+      if (isMobileViewport()) {
+        setMobileView("workspace");
+      }
+      await loadWorkspaceFile(path);
+    },
+    [loadWorkspaceFile, setMobileView],
+  );
+
+  const saveActiveFile = useCallback(async () => {
+    const path = activeFilePathRef.current;
+    if (!path) {
+      return;
+    }
+
+    await workspace.writeFile(path, fileEditorContent);
+    setFileEditorDirty(false);
+    appendTerminal(`\n[workspace] saved ${path}\n`);
+    await refreshWorkspaceTree();
+  }, [appendTerminal, fileEditorContent, refreshWorkspaceTree, workspace]);
+
+  const saveSettings = useCallback(() => {
+    const nextApiKey = apiKeyInput.trim();
+    const nextModelId = modelIdInput.trim() || getDefaultModelId();
+    localStorage.setItem(STORAGE_KEYS.apiKey, nextApiKey);
+    localStorage.setItem(STORAGE_KEYS.modelId, nextModelId);
+    setSavedApiKey(nextApiKey);
+    setSavedModelId(nextModelId);
+
+    if (agentRef.current) {
+      updateAgentConfiguration(agentRef.current, nextModelId, shell);
+    }
+
+    appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
+    if (isMobileViewport()) {
+      setMobileView(nextApiKey ? "command" : "settings");
+      if (nextApiKey) {
+        focusPromptInput();
+      }
+    }
+  }, [apiKeyInput, appendTerminal, focusPromptInput, modelIdInput, setMobileView, shell]);
+
+  const runManualShell = useCallback(
+    async (command: string) => {
+      setStatus("Shell", "busy");
+      setIsBusy(true);
+      appendTerminal(`\n$ ${command}\n`);
+      const reviewEntryId = addReviewShell(command);
+      let reviewOutput = "";
+      let reviewExitCode: number | null = null;
+
+      try {
+        const result = await shell.execute(command);
+        if (result.stdout) {
+          appendTerminal(result.stdout.endsWith("\n") ? result.stdout : `${result.stdout}\n`);
+          reviewOutput += result.stdout;
+        }
+        if (result.stderr) {
+          appendTerminal(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`);
+          reviewOutput += `${reviewOutput ? "\n" : ""}${result.stderr}`;
+        }
+        if (result.exitCode !== 0) {
+          appendTerminal(`[exit ${result.exitCode}]\n`);
+        }
+        reviewExitCode = result.exitCode;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendTerminal(`[shell error] ${message}\n`);
+        setStatus("Shell error", "error");
+        reviewOutput = message;
+        reviewExitCode = 1;
+      } finally {
+        setIsBusy(false);
+      }
+
+      updateReviewEntry(reviewEntryId, (entry) =>
+        entry.kind === "shell"
+          ? {
+              ...entry,
+              output: reviewOutput,
+              exitCode: reviewExitCode,
+              pending: false,
+            }
+          : entry,
+      );
+      await refreshWorkspaceTree();
+      setStatus("Idle", "idle");
+    },
+    [addReviewShell, appendTerminal, refreshWorkspaceTree, setStatus, shell, updateReviewEntry],
+  );
+
+  const submitPrompt = useCallback(
+    async (prompt: string) => {
+      if (!prompt || !agentRef.current) {
+        return;
+      }
+      if (!savedApiKeyRef.current.trim()) {
+        addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
+        appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
+        setStatus("Missing API key", "error");
+        if (isMobileViewport()) {
+          setMobileView("settings");
+        }
+        return;
+      }
+
+      updateAgentConfiguration(agentRef.current, savedModelIdRef.current, shell);
+      if (isMobileViewport()) {
+        setMobileView("console");
+      }
+      addReviewMessage("user", prompt);
+      appendActivity(`\nuser> ${prompt}\n`);
+      setPromptValue("");
+
+      try {
+        await agentRef.current.prompt(prompt);
+      } catch (error) {
+        if (assistantBlockOpenRef.current) {
+          assistantBlockOpenRef.current = false;
+          activeAssistantReviewIdRef.current = undefined;
+          appendActivity("\n");
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        addReviewNotice(message, "error");
+        appendActivity(`[agent error] ${message}\n`);
+        setStatus("Agent error", "error");
+        setIsBusy(false);
+      }
+    },
+    [addReviewMessage, addReviewNotice, appendActivity, setMobileView, setStatus, shell],
+  );
+
+  const submitCommandBar = useCallback(async () => {
+    const input = promptValue.trim();
+    if (!input) {
+      return;
+    }
+
+    if (input.startsWith("!")) {
+      const command = input.slice(1).trim();
+      if (!command) {
+        appendTerminal("\n[error] Enter a shell command after !.\n");
+        setStatus("Missing command", "error");
+        return;
+      }
+      setPromptValue("");
+      if (isMobileViewport()) {
+        setMobileView("console");
+      }
+      await runManualShell(command);
+      return;
+    }
+
+    await submitPrompt(input);
+  }, [appendTerminal, promptValue, runManualShell, setMobileView, setStatus, submitPrompt]);
+
+  const resetWorkspace = useCallback(async () => {
+    const confirmed = window.confirm("Reset the OPFS workspace? This removes all files created in just-pi.");
+    if (!confirmed) {
+      return;
+    }
+    await workspace.clear();
+    await ensureStarterWorkspace();
+    setActiveFilePath(undefined);
+    setFileEditorContent("");
+    setFileEditorDirty(false);
+    appendTerminal("\n[workspace] reset complete.\n");
+    await refreshWorkspaceTree();
+  }, [appendTerminal, ensureStarterWorkspace, refreshWorkspaceTree, workspace]);
+
+  const clearTranscript = useCallback(() => {
+    agentRef.current?.reset();
+    localStorage.removeItem("just-pi.messages");
+    resetTerminal("Transcript cleared.\n");
+    resetActivity("Agent activity cleared.\n");
+    resetReviewEntries();
+    setStatus("Idle", "idle");
+  }, [resetActivity, resetReviewEntries, resetTerminal, setStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      await workspace.ready();
+      await ensureStarterWorkspace();
+      if (cancelled) {
+        return;
+      }
+
+      setTerminalText((current) =>
+        current || "just-pi ready. Configure an OpenRouter key, inspect the workspace, then prompt the agent.\n",
+      );
+      setActivityText((current) => current || "Agent activity will appear here.\n");
+
+      const agent = createBrowserAgentSession({
+        workspace,
+        shell,
+        readApiKey: () => savedApiKeyRef.current,
+        readModelId: () => savedModelIdRef.current,
+      });
+      agent.state.messages = restoreMessages();
+      updateAgentConfiguration(agent, savedModelIdRef.current, shell);
+      agentRef.current = agent;
+
+      agent.subscribe(async (event) => {
+        if (cancelled) {
+          return;
+        }
+
+        const toolText = formatToolEvent(event);
+        if (toolText) {
+          appendActivity(toolText);
+        }
+
+        if (shouldOpenAssistantBlock(event)) {
+          assistantBlockOpenRef.current = true;
+          activeAssistantReviewIdRef.current = addReviewMessage("assistant", "");
+          appendActivity("\nassistant> ");
+        }
+
+        const delta = formatAssistantDelta(event);
+        if (delta) {
+          appendActivity(delta);
+          if (activeAssistantReviewIdRef.current) {
+            updateReviewEntry(activeAssistantReviewIdRef.current, (entry) =>
+              entry.kind === "assistant" ? { ...entry, text: entry.text + delta } : entry,
+            );
+          }
+        }
+
+        if (shouldCloseAssistantBlock(event) && assistantBlockOpenRef.current) {
+          assistantBlockOpenRef.current = false;
+          activeAssistantReviewIdRef.current = undefined;
+          appendActivity("\n");
+        }
+
+        if (event.type === "agent_start") {
+          setStatus("Running", "busy");
+          setIsBusy(true);
+          if (isMobileViewport()) {
+            setMobileView("console");
+          }
+        }
+
+        if (event.type === "agent_end") {
+          setStatus("Idle", "idle");
+          setIsBusy(false);
+          await refreshWorkspaceTree();
+        }
+      });
+
+      setStatus("Idle", "idle");
+      setIsBusy(false);
+      await refreshWorkspaceTree();
+      if (!cancelled) {
+        setIsReady(true);
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+      agentRef.current?.abort();
+      agentRef.current = undefined;
+    };
+  }, [addReviewMessage, appendActivity, ensureStarterWorkspace, refreshWorkspaceTree, setMobileView, setStatus, shell, updateReviewEntry, workspace]);
+
+  const hasSavedApiKey = savedApiKey.trim().length > 0;
+  const onboardingTitle = hasSavedApiKey ? "Ready to build" : "Quick start";
+  const onboardingText = hasSavedApiKey
+    ? "Agent mode is enabled. Use plain text for the agent, start with ! for shell commands, and remember that files persist in this browser."
+    : isGitHubPagesHost()
+      ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one."
+      : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one.";
+
+  const commandMode = promptValue.trim().startsWith("!") ? "shell" : "agent";
+  const promptSubmitLabel = commandMode === "shell" ? "Run command" : "Send prompt";
+  const appDataState = hasSavedApiKey ? "ready" : "setup";
+
+  return (
+    <div className="app" id="app" data-mobile-view={mobileView}>
+      <header className="hero">
+        <div className="brand-lockup">
+          <h1>just-pi</h1>
+          <p className="hero-copy">Zero-infra AI IDE for Pi agenting, OPFS files, and just-bash.</p>
+        </div>
+        <div className="hero-side">
+          <div className="status-card">
+            <span className="status-chip" id="status-chip" data-tone={statusTone}>
+              {statusLabel}
+            </span>
+            <span className="cwd-chip" id="cwd-chip">
+              {cwd}
+            </span>
+          </div>
+          <a className="repo-link" href="https://github.com/bioshazard/just-pi" target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+        </div>
+      </header>
+
+      <section className="panel controls">
+        <div className="control-grid">
+          <label className="field">
+            <span>OpenRouter API key</span>
+            <input
+              id="api-key"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="sk-or-v1-..."
+              value={apiKeyInput}
+              onChange={(event) => setApiKeyInput(event.target.value)}
+            />
+            <span className="field-note">Stored only in this browser via localStorage.</span>
+          </label>
+
+          <label className="field">
+            <span>Model</span>
+            <input
+              id="model-id"
+              type="text"
+              list="model-options"
+              spellCheck={false}
+              placeholder="openrouter/free"
+              value={modelIdInput}
+              onChange={(event) => setModelIdInput(event.target.value)}
+            />
+            <datalist id="model-options">
+              {OPENROUTER_MODELS.map((modelId) => (
+                <option key={modelId} value={modelId} />
+              ))}
+            </datalist>
+            <span className="field-note">
+              Defaults to <code>openrouter/free</code>.
+            </span>
+          </label>
+        </div>
+
+        <div className="button-row">
+          <button id="save-settings" type="button" onClick={saveSettings}>
+            Save settings
+          </button>
+          <button id="clear-transcript" type="button" onClick={clearTranscript}>
+            Clear transcript
+          </button>
+          <button id="reset-workspace" type="button" onClick={() => void resetWorkspace()}>
+            Reset workspace
+          </button>
+          <button id="refresh-workspace" type="button" onClick={() => void refreshWorkspaceTree()}>
+            Refresh workspace
+          </button>
+        </div>
+
+        <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
+          <div>
+            <h3 id="onboarding-title">{onboardingTitle}</h3>
+            <p id="onboarding-text" className="panel-copy">
+              {onboardingText.split("<code>").length > 1 ? null : onboardingText}
+              {onboardingText.includes("<code>") ? (
+                <>
+                  {onboardingText.split("<code>")[0]}
+                  <code>{onboardingText.split("<code>")[1]?.split("</code>")[0] ?? ""}</code>
+                  {onboardingText.split("</code>")[1] ?? ""}
+                </>
+              ) : null}
+            </p>
+          </div>
+          <div className="button-row onboarding-actions">
+            {QUICK_ACTIONS.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setMobileView("command");
+                  setPromptValue(action.value);
+                  focusPromptInput();
+                }}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <nav className="mobile-nav" aria-label="Quick view switcher">
+        {([
+          ["settings", "Setup"],
+          ["command", "Drive"],
+          ["console", "Review"],
+          ["workspace", "Files"],
+        ] as const).map(([view, label]) => (
+          <button
+            key={view}
+            type="button"
+            className={`mobile-tab${mobileView === view ? " is-active" : ""}`}
+            data-mobile-target={view}
+            aria-pressed={mobileView === view}
+            onClick={() => {
+              setMobileView(view);
+              if (view === "command") {
+                focusPromptInput();
+              }
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="main-grid">
+        <section className="panel console-panel">
+          <div className="panel-header">
+            <h2>Console</h2>
+          </div>
+
+          <div id="review-log" ref={reviewLogRef} className="review-log" aria-live="polite">
+            {reviewEntries.length === 0 ? (
+              <p className="review-empty">Review timeline will appear here.</p>
+            ) : (
+              reviewEntries.map((entry) => <ReviewEntryView key={entry.id} entry={entry} />)
+            )}
+          </div>
+
+          <div className="console-grid">
+            <section className="console-section console-section-terminal">
+              <div className="console-section-header">
+                <h3>Terminal</h3>
+              </div>
+              <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                {terminalText}
+              </pre>
+            </section>
+
+            <section className="console-section console-section-activity">
+              <div className="console-section-header">
+                <h3>Agent activity</h3>
+              </div>
+              <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                {activityText}
+              </pre>
+            </section>
+          </div>
+        </section>
+
+        <aside className="panel workspace-panel">
+          <div className="panel-header">
+            <h2>Workspace</h2>
+          </div>
+          <div className="workspace-browser">
+            <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
+              {workspaceEntries.map((entry) =>
+                entry.kind === "directory" ? (
+                  <div
+                    key={entry.path}
+                    className="workspace-node workspace-node-directory"
+                    style={{ ["--depth" as string]: String(entry.depth) }}
+                  >
+                    {`▾ ${entry.name}`}
+                  </div>
+                ) : (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    className={`workspace-node${entry.path === activeFilePath ? " is-active" : ""}`}
+                    style={{ ["--depth" as string]: String(entry.depth) }}
+                    onClick={() => void openWorkspaceFile(entry.path)}
+                  >
+                    {entry.name}
+                  </button>
+                ),
+              )}
+            </div>
+
+            <section className="file-viewer">
+              <div className="file-viewer-header">
+                <div>
+                  <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "No file selected"}</h3>
+                  <p id="file-subtitle" className="file-subtitle">
+                    {activeFilePath ? activeFilePath : "Choose a file from the workspace to view or edit it."}
+                  </p>
+                </div>
+
+                <div className="button-row file-actions">
+                  <button
+                    id="file-reload"
+                    type="button"
+                    disabled={!activeFilePath}
+                    onClick={async () => {
+                      if (!activeFilePathRef.current) {
+                        return;
+                      }
+                      if (fileEditorDirtyRef.current) {
+                        const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
+                        if (!shouldDiscard) {
+                          return;
+                        }
+                      }
+                      await loadWorkspaceFile(activeFilePathRef.current);
+                    }}
+                  >
+                    Reload file
+                  </button>
+                  <button id="file-save" type="button" disabled={!activeFilePath || !fileEditorDirty} onClick={() => void saveActiveFile()}>
+                    Save file
+                  </button>
+                </div>
+              </div>
+
+              <textarea
+                id="file-editor"
+                className="file-editor"
+                spellCheck={false}
+                placeholder="Open a file from the workspace to inspect or edit it."
+                disabled={!activeFilePath}
+                value={fileEditorContent}
+                onChange={(event) => {
+                  setFileEditorContent(event.target.value);
+                  if (activeFilePath) {
+                    setFileEditorDirty(true);
+                  }
+                }}
+              />
+            </section>
+          </div>
+        </aside>
+      </main>
+
+      <section className="input-grid">
+        <form
+          id="prompt-form"
+          className="panel input-panel"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            void submitCommandBar();
+          }}
+        >
+          <div className="panel-header input-panel-header">
+            <div>
+              <h2>Command bar</h2>
+              <p className="panel-copy">
+                Start with <code>!</code> to run just-bash. Plain text goes to the agent.
+              </p>
+            </div>
+            <span id="command-mode" className="mode-chip" data-mode={commandMode}>
+              {commandMode === "shell" ? "Shell mode" : "Agent mode"}
+            </span>
+          </div>
+
+          <textarea
+            ref={promptInputRef}
+            id="prompt-input"
+            rows={4}
+            placeholder="Ask the agent something, or run !ls -la against the OPFS workspace."
+            value={promptValue}
+            disabled={!isReady || isBusy}
+            onChange={(event) => setPromptValue(event.target.value)}
+            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+              if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
+                return;
+              }
+              event.preventDefault();
+              void submitCommandBar();
+            }}
+          />
+
+          <div className="input-footer">
+            <p className="input-hint">Press Ctrl+Enter or Cmd+Enter to submit.</p>
+            <div className="button-row">
+              <button id="prompt-submit" type="submit" disabled={!isReady || isBusy}>
+                {promptSubmitLabel}
+              </button>
+              <button
+                id="prompt-stop"
+                type="button"
+                disabled={!isBusy}
+                onClick={() => {
+                  agentRef.current?.abort();
+                  addReviewNotice("Agent abort requested.");
+                  appendActivity("\n[agent] abort requested.\n");
+                }}
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}

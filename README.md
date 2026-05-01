@@ -6,6 +6,7 @@ Browser-native coding sandbox with:
 - **OpenRouter BYOK** stored in `localStorage`
 - **OPFS** for persistent files across refreshes
 - **just-bash** wired to the same workspace state as the agent tools
+- **React + Vite** driving the IDE shell, review timeline, and file workspace UI
 
 ## Run locally
 
@@ -32,9 +33,11 @@ If the site does not publish on the first run, set the repository's **Pages** so
 2. Paste an OpenRouter API key into the settings panel and save it.
 3. Pick or type an OpenRouter model ID.
 4. Use the **Quick start** callout or the **Command bar** for both workflows: start with `!` to run a just-bash command, or enter plain text to send a prompt to the Browser-Native Systems Engineer.
+5. On mobile, use **Setup / Drive / Review / Files** to move between configuration, prompting, inline command/assistant review, and the workspace editor.
 
 ## Notes
 
 - Files persist in the browser's origin-private storage until you reset the workspace or clear site data.
 - The API key is never hardcoded; it is read from `localStorage` at runtime.
 - This scaffold uses the Pi agent core and Pi AI packages directly so the browser bundle stays compatible while preserving the coding-agent-style tool surface.
+- The current UI layer is React, but the browser runtime core remains in `src/opfs.ts`, `src/shell.ts`, and `src/agent-session.ts`.
