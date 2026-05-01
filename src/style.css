@@ -401,8 +401,19 @@ h2 {
   min-height: 0;
 }
 
+.console-stack {
+  display: grid;
+  grid-template-rows: minmax(0, 0.95fr) minmax(0, 1fr);
+  gap: var(--panel-gap);
+  min-height: 0;
+}
+
 .review-log {
-  display: none;
+  display: grid;
+  gap: 1rem;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.1rem;
 }
 
 .review-empty {
@@ -449,6 +460,14 @@ h2 {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.assistant-review-root {
+  min-height: 0;
+}
+
+.assistant-review-bubble p {
+  margin: 0;
 }
 
 .review-entry-user,
@@ -804,14 +823,6 @@ h2 {
 
   .app[data-mobile-view="console"] .console-grid {
     display: none;
-  }
-
-  .review-log {
-    display: grid;
-    gap: 1rem;
-    min-height: 0;
-    overflow: auto;
-    padding-right: 0.1rem;
   }
 
   #prompt-form {

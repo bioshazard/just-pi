@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { Agent } from "@mariozechner/pi-agent-core";
+import type { ChatModelAdapter, ChatModelRunResult, ThreadMessage } from "@assistant-ui/react";
 import type { ShellRuntime } from "./shell";
 
+import { AssistantReviewPane, type AssistantReviewPaneHandle } from "./AssistantReviewPane";
 import {
   formatAssistantDelta,
   formatToolEvent,
@@ -18,6 +20,7 @@ const STORAGE_KEYS = {
   terminal: "just-pi.terminal",
   activity: "just-pi.activity",
   review: "just-pi.review",
+  assistantThread: "just-pi.assistant-thread",
   mobileView: "just-pi.mobile-view",
   shellCwd: "just-pi.shell-cwd",
 } as const;
@@ -31,6 +34,18 @@ type ReviewEntry =
 
 interface ReviewEntryViewProps {
   entry: ReviewEntry;
+}
+
+function getLatestUserPrompt(messages: readonly ThreadMessage[]): string {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  if (!lastUserMessage) {
+    return "";
+  }
+  return lastUserMessage.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
 }
 
 const QUICK_ACTIONS = [
@@ -54,6 +69,12 @@ function readStorageJson<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function readSupplementalReviewEntries(): ReviewEntry[] {
+  return readStorageJson<ReviewEntry[]>(STORAGE_KEYS.review, []).filter(
+    (entry) => entry.kind === "shell" || entry.kind === "notice",
+  );
 }
 
 function isGitHubPagesHost(): boolean {
@@ -114,8 +135,6 @@ export function App() {
   const workspace = useMemo(() => new OpfsWorkspace(), []);
 
   const agentRef = useRef<Agent | undefined>(undefined);
-  const assistantBlockOpenRef = useRef(false);
-  const activeAssistantReviewIdRef = useRef<string | undefined>(undefined);
   const savedApiKeyRef = useRef(savedApiKeyInitial);
   const savedModelIdRef = useRef(savedModelInitial);
   const activeFilePathRef = useRef<string | undefined>(undefined);
@@ -125,6 +144,7 @@ export function App() {
   const shellLoadPromiseRef = useRef<Promise<ShellRuntime> | undefined>(undefined);
   const shellRef = useRef<ShellRuntime | undefined>(undefined);
   const isMountedRef = useRef(true);
+  const assistantReviewRef = useRef<AssistantReviewPaneHandle>(null);
 
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const terminalRef = useRef<HTMLPreElement>(null);
@@ -140,13 +160,14 @@ export function App() {
   const [modelIdInput, setModelIdInput] = useState(savedModelInitial);
   const [terminalText, setTerminalText] = useState(() => readStorageText(STORAGE_KEYS.terminal));
   const [activityText, setActivityText] = useState(() => readStorageText(STORAGE_KEYS.activity));
-  const [reviewEntries, setReviewEntries] = useState<ReviewEntry[]>(() => readStorageJson<ReviewEntry[]>(STORAGE_KEYS.review, []));
+  const [reviewEntries, setReviewEntries] = useState<ReviewEntry[]>(() => readSupplementalReviewEntries());
   const [mobileView, setMobileViewState] = useState<MobileView>(() => readInitialMobileView(savedApiKeyInitial));
   const [statusLabel, setStatusLabel] = useState("Idle");
   const [statusTone, setStatusTone] = useState<StatusTone>("idle");
   const [cwd, setCwd] = useState(savedCwdInitial);
   const [isBusy, setIsBusy] = useState(false);
   const [promptValue, setPromptValue] = useState("");
+  const [assistantThreadKey, setAssistantThreadKey] = useState(0);
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string>();
   const [fileEditorContent, setFileEditorContent] = useState("");
@@ -248,16 +269,6 @@ export function App() {
     setReviewEntries((current) => [...current, entry]);
     return entry.id;
   }, []);
-
-  const addReviewMessage = useCallback(
-    (kind: "user" | "assistant", text: string) =>
-      addReviewEntry({
-        id: crypto.randomUUID(),
-        kind,
-        text,
-      }),
-    [addReviewEntry],
-  );
 
   const addReviewNotice = useCallback(
     (text: string, tone: "info" | "error" = "info") =>
@@ -445,47 +456,6 @@ export function App() {
         if (event.type === "message_end" || event.type === "agent_end") {
           localStorage.setItem("just-pi.messages", JSON.stringify(agent.state.messages));
         }
-
-        const toolText = formatToolEvent(event);
-        if (toolText) {
-          appendActivity(toolText);
-        }
-
-        if (shouldOpenAssistantBlock(event)) {
-          assistantBlockOpenRef.current = true;
-          activeAssistantReviewIdRef.current = addReviewMessage("assistant", "");
-          appendActivity("\nassistant> ");
-        }
-
-        const delta = formatAssistantDelta(event);
-        if (delta) {
-          appendActivity(delta);
-          if (activeAssistantReviewIdRef.current) {
-            updateReviewEntry(activeAssistantReviewIdRef.current, (entry) =>
-              entry.kind === "assistant" ? { ...entry, text: entry.text + delta } : entry,
-            );
-          }
-        }
-
-        if (shouldCloseAssistantBlock(event) && assistantBlockOpenRef.current) {
-          assistantBlockOpenRef.current = false;
-          activeAssistantReviewIdRef.current = undefined;
-          appendActivity("\n");
-        }
-
-        if (event.type === "agent_start") {
-          setStatus("Running", "busy");
-          setIsBusy(true);
-          if (isMobileViewport()) {
-            setMobileView("console");
-          }
-        }
-
-        if (event.type === "agent_end") {
-          setStatus("Idle", "idle");
-          setIsBusy(false);
-          await refreshWorkspaceTree();
-        }
       });
 
       if (!isMountedRef.current) {
@@ -502,7 +472,137 @@ export function App() {
     } finally {
       agentLoadPromiseRef.current = undefined;
     }
-  }, [addReviewMessage, appendActivity, getShell, refreshWorkspaceTree, setMobileView, setStatus, updateReviewEntry, workspace]);
+  }, [getShell, workspace]);
+
+  const assistantAdapter = useMemo<ChatModelAdapter>(
+    () => ({
+      async *run({ messages }): AsyncGenerator<ChatModelRunResult, void> {
+        const prompt = getLatestUserPrompt(messages);
+        if (!prompt) {
+          return;
+        }
+
+        const agent = await getOrCreateAgent();
+        const shell = await getShell();
+        const { updateAgentConfiguration } = await import("./agent-session");
+        await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
+
+        let assistantText = "";
+        let assistantBlockOpen = false;
+        let isDone = false;
+        let nextResultResolver: ((result: IteratorResult<ChatModelRunResult>) => void) | null = null;
+        const queuedResults: ChatModelRunResult[] = [];
+        let failure: Error | null = null;
+
+        const pushResult = (result: ChatModelRunResult) => {
+          if (nextResultResolver) {
+            nextResultResolver({ value: result, done: false });
+            nextResultResolver = null;
+            return;
+          }
+          queuedResults.push(result);
+        };
+
+        const finish = () => {
+          if (isDone) {
+            return;
+          }
+          isDone = true;
+          if (nextResultResolver) {
+            nextResultResolver({ value: undefined as never, done: true });
+            nextResultResolver = null;
+          }
+        };
+
+        const readNext = async (): Promise<IteratorResult<ChatModelRunResult>> => {
+          if (queuedResults.length > 0) {
+            return { value: queuedResults.shift() as ChatModelRunResult, done: false };
+          }
+          if (isDone) {
+            return { value: undefined as never, done: true };
+          }
+          return new Promise<IteratorResult<ChatModelRunResult>>((resolve) => {
+            nextResultResolver = resolve;
+          });
+        };
+
+        const unsubscribe = agent.subscribe(async (event) => {
+          if (event.type === "message_end" || event.type === "agent_end") {
+            localStorage.setItem("just-pi.messages", JSON.stringify(agent.state.messages));
+          }
+
+          const toolText = formatToolEvent(event);
+          if (toolText) {
+            appendActivity(toolText);
+          }
+
+          if (shouldOpenAssistantBlock(event)) {
+            assistantBlockOpen = true;
+            appendActivity("\nassistant> ");
+          }
+
+          const delta = formatAssistantDelta(event);
+          if (delta) {
+            assistantText += delta;
+            appendActivity(delta);
+            pushResult({
+              content: [{ type: "text", text: assistantText }],
+            });
+          }
+
+          if (shouldCloseAssistantBlock(event) && assistantBlockOpen) {
+            assistantBlockOpen = false;
+            appendActivity("\n");
+          }
+
+          if (event.type === "agent_start") {
+            setStatus("Running", "busy");
+            setIsBusy(true);
+            if (isMobileViewport()) {
+              setMobileView("console");
+            }
+          }
+
+          if (event.type === "agent_end") {
+            setStatus("Idle", "idle");
+            setIsBusy(false);
+            await refreshWorkspaceTree();
+            finish();
+          }
+        });
+
+        const promptPromise = agent.prompt(prompt).catch((error) => {
+          failure = error instanceof Error ? error : new Error(String(error));
+          if (assistantBlockOpen) {
+            assistantBlockOpen = false;
+            appendActivity("\n");
+          }
+          setStatus("Agent error", "error");
+          setIsBusy(false);
+          finish();
+        });
+
+        try {
+          while (true) {
+            const next = await readNext();
+            if (next.done) {
+              break;
+            }
+            yield next.value;
+          }
+
+          await promptPromise;
+
+          if (failure) {
+            throw failure;
+          }
+        } finally {
+          unsubscribe();
+        }
+      },
+    }),
+    [appendActivity, getOrCreateAgent, getShell, refreshWorkspaceTree, setMobileView, setStatus],
+  );
 
   const saveSettings = useCallback(async () => {
     const nextApiKey = apiKeyInput.trim();
@@ -592,25 +692,15 @@ export function App() {
         return;
       }
 
-      const agent = await getOrCreateAgent();
-      const shell = await getShell();
-      const { updateAgentConfiguration } = await import("./agent-session");
-      await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
       if (isMobileViewport()) {
         setMobileView("console");
       }
-      addReviewMessage("user", prompt);
       appendActivity(`\nuser> ${prompt}\n`);
       setPromptValue("");
 
       try {
-        await agent.prompt(prompt);
+        assistantReviewRef.current?.sendPrompt(prompt);
       } catch (error) {
-        if (assistantBlockOpenRef.current) {
-          assistantBlockOpenRef.current = false;
-          activeAssistantReviewIdRef.current = undefined;
-          appendActivity("\n");
-        }
         const message = error instanceof Error ? error.message : String(error);
         addReviewNotice(message, "error");
         appendActivity(`[agent error] ${message}\n`);
@@ -618,7 +708,7 @@ export function App() {
         setIsBusy(false);
       }
     },
-    [addReviewMessage, addReviewNotice, appendActivity, getOrCreateAgent, getShell, setMobileView, setStatus],
+    [addReviewNotice, appendActivity, setMobileView, setStatus],
   );
 
   const submitCommandBar = useCallback(async () => {
@@ -662,9 +752,11 @@ export function App() {
   const clearTranscript = useCallback(() => {
     agentRef.current?.reset();
     localStorage.removeItem("just-pi.messages");
+    localStorage.removeItem(STORAGE_KEYS.assistantThread);
     resetTerminal("Transcript cleared.\n");
     resetActivity("Agent activity cleared.\n");
     resetReviewEntries();
+    setAssistantThreadKey((current) => current + 1);
     setStatus("Idle", "idle");
   }, [resetActivity, resetReviewEntries, resetTerminal, setStatus]);
 
@@ -854,32 +946,40 @@ export function App() {
             <h2>Console</h2>
           </div>
 
-          <div id="review-log" ref={reviewLogRef} className="review-log" aria-live="polite">
-            {reviewEntries.length === 0 ? (
-              <p className="review-empty">Review timeline will appear here.</p>
-            ) : (
-              reviewEntries.map((entry) => <ReviewEntryView key={entry.id} entry={entry} />)
-            )}
-          </div>
+          <div className="console-stack">
+            <AssistantReviewPane
+              key={assistantThreadKey}
+              ref={assistantReviewRef}
+              adapter={assistantAdapter}
+              storageKey={STORAGE_KEYS.assistantThread}
+              reviewLogId="review-log"
+              viewportRef={reviewLogRef}
+              hasSupplementalEntries={reviewEntries.length > 0}
+              emptyState={<p className="review-empty">Review timeline will appear here.</p>}
+              supplementalEntries={reviewEntries.map((entry) => (
+                <ReviewEntryView key={entry.id} entry={entry} />
+              ))}
+            />
 
-          <div className="console-grid">
-            <section className="console-section console-section-terminal">
-              <div className="console-section-header">
-                <h3>Terminal</h3>
-              </div>
-              <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
-                {terminalText}
-              </pre>
-            </section>
+            <div className="console-grid">
+              <section className="console-section console-section-terminal">
+                <div className="console-section-header">
+                  <h3>Terminal</h3>
+                </div>
+                <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                  {terminalText}
+                </pre>
+              </section>
 
-            <section className="console-section console-section-activity">
-              <div className="console-section-header">
-                <h3>Agent activity</h3>
-              </div>
-              <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
-                {activityText}
-              </pre>
-            </section>
+              <section className="console-section console-section-activity">
+                <div className="console-section-header">
+                  <h3>Agent activity</h3>
+                </div>
+                <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                  {activityText}
+                </pre>
+              </section>
+            </div>
           </div>
         </section>
 
