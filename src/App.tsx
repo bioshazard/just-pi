@@ -8,6 +8,7 @@ import {
   type LocalRuntimeOptions,
   type ThreadMessage,
 } from "@assistant-ui/react";
+import { useHashLocation } from "wouter/use-hash-location";
 import type { ShellRuntime } from "./shell";
 
 import { AssistantCommandBar, type AssistantCommandBarHandle } from "./AssistantCommandBar";
@@ -30,12 +31,11 @@ const STORAGE_KEYS = {
   activity: "just-pi.activity",
   review: "just-pi.review",
   assistantThread: "just-pi.assistant-thread",
-  mobileView: "just-pi.mobile-view",
   shellCwd: "just-pi.shell-cwd",
 } as const;
 
 type StatusTone = "idle" | "busy" | "error";
-type MobileView = "settings" | "command" | "console" | "workspace";
+type AppRoute = "/setup" | "/drive" | "/review" | "/files";
 type ReviewEntry =
   | { id: string; kind: "user" | "assistant"; text: string }
   | { id: string; kind: "shell"; source: "user"; command: string; output: string; exitCode: number | null; pending: boolean }
@@ -129,6 +129,8 @@ const QUICK_ACTIONS = [
   { label: "Scaffold starter project", value: "Create a tiny HTML, CSS, and JavaScript starter project in this workspace." },
 ] as const;
 
+const APP_ROUTES = ["/setup", "/drive", "/review", "/files"] as const satisfies readonly AppRoute[];
+
 function readStorageText(key: string, fallback = ""): string {
   return localStorage.getItem(key) ?? fallback;
 }
@@ -152,16 +154,8 @@ function readSupplementalReviewEntries(): ReviewEntry[] {
   );
 }
 
-function isMobileViewport(): boolean {
-  return window.matchMedia("(max-width: 980px)").matches;
-}
-
-function readInitialMobileView(savedApiKey: string): MobileView {
-  const stored = localStorage.getItem(STORAGE_KEYS.mobileView);
-  if (stored === "settings" || stored === "command" || stored === "console" || stored === "workspace") {
-    return stored;
-  }
-  return savedApiKey.trim().length > 0 ? "command" : "settings";
+function isAppRoute(path: string): path is AppRoute {
+  return APP_ROUTES.includes(path as AppRoute);
 }
 
 function ReviewEntryView({ entry }: ReviewEntryViewProps) {
@@ -226,6 +220,7 @@ export function App() {
   const terminalRef = useRef<HTMLPreElement>(null);
   const activityRef = useRef<HTMLPreElement>(null);
   const reviewLogRef = useRef<HTMLDivElement>(null);
+  const [route, setRoute] = useHashLocation();
 
   const [savedApiKey, setSavedApiKey] = useState(savedApiKeyInitial);
   const [savedModelId, setSavedModelId] = useState(savedModelInitial);
@@ -237,7 +232,6 @@ export function App() {
   const [terminalText, setTerminalText] = useState(() => readStorageText(STORAGE_KEYS.terminal));
   const [activityText, setActivityText] = useState(() => readStorageText(STORAGE_KEYS.activity));
   const [reviewEntries, setReviewEntries] = useState<ReviewEntry[]>(() => readSupplementalReviewEntries());
-  const [mobileView, setMobileViewState] = useState<MobileView>(() => readInitialMobileView(savedApiKeyInitial));
   const [statusLabel, setStatusLabel] = useState("Idle");
   const [statusTone, setStatusTone] = useState<StatusTone>("idle");
   const [cwd, setCwd] = useState(savedCwdInitial);
@@ -249,6 +243,7 @@ export function App() {
   const [fileEditorDirty, setFileEditorDirty] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [isSetupExpanded, setIsSetupExpanded] = useState(() => savedApiKeyInitial.trim().length === 0);
+  const [pendingDriveText, setPendingDriveText] = useState<string>();
 
   const suggestionAdapter = useMemo(
     () => ({
@@ -311,10 +306,6 @@ export function App() {
   }, [reviewEntries]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.mobileView, mobileView);
-  }, [mobileView]);
-
-  useEffect(() => {
     terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight });
   }, [terminalText]);
 
@@ -337,13 +328,40 @@ export function App() {
     [readCwd],
   );
 
-  const setMobileView = useCallback((view: MobileView) => {
-    setMobileViewState(view);
-  }, []);
+  const hasSavedApiKey = savedApiKey.trim().length > 0;
+  const defaultRoute: AppRoute = hasSavedApiKey ? "/drive" : "/setup";
+  const currentRoute: AppRoute = isAppRoute(route) ? route : defaultRoute;
+
+  useEffect(() => {
+    if (route !== currentRoute) {
+      setRoute(currentRoute);
+    }
+  }, [currentRoute, route, setRoute]);
+
+  const navigate = useCallback(
+    (nextRoute: AppRoute) => {
+      setRoute(nextRoute);
+    },
+    [setRoute],
+  );
 
   const focusPromptInput = useCallback(() => {
     commandBarRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (currentRoute !== "/drive" || !pendingDriveText) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      commandBarRef.current?.setText(pendingDriveText);
+      commandBarRef.current?.focus();
+      setPendingDriveText(undefined);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [currentRoute, pendingDriveText]);
 
   const appendTerminal = useCallback((text: string) => {
     setTerminalText((current) => current + text);
@@ -452,13 +470,10 @@ export function App() {
           return;
         }
       }
-
-      if (isMobileViewport()) {
-        setMobileView("workspace");
-      }
+      navigate("/files");
       await loadWorkspaceFile(path);
     },
-    [loadWorkspaceFile, setMobileView],
+    [loadWorkspaceFile, navigate],
   );
 
   const saveActiveFile = useCallback(async () => {
@@ -670,9 +685,7 @@ export function App() {
           if (event.type === "agent_start") {
             setStatus("Running", "busy");
             setIsBusy(true);
-            if (isMobileViewport()) {
-              setMobileView("console");
-            }
+            navigate("/review");
           }
 
           if (event.type === "agent_end") {
@@ -714,7 +727,7 @@ export function App() {
         }
       },
     }),
-    [appendActivity, getOrCreateAgent, getShell, refreshWorkspaceTree, setMobileView, setStatus],
+    [appendActivity, getOrCreateAgent, getShell, navigate, refreshWorkspaceTree, setStatus],
   );
 
   const saveSettings = useCallback(async () => {
@@ -733,13 +746,13 @@ export function App() {
     }
 
     appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
-    if (isMobileViewport()) {
-      setMobileView(nextApiKey ? "command" : "settings");
-      if (nextApiKey) {
+    navigate(nextApiKey ? "/drive" : "/setup");
+    if (nextApiKey) {
+      window.requestAnimationFrame(() => {
         focusPromptInput();
-      }
+      });
     }
-  }, [apiKeyInput, appendTerminal, focusPromptInput, getShell, modelIdInput, setMobileView]);
+  }, [apiKeyInput, appendTerminal, focusPromptInput, getShell, modelIdInput, navigate]);
 
   const runManualShell = useCallback(
     async (command: string) => {
@@ -795,10 +808,8 @@ export function App() {
     addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
     appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
     setStatus("Missing API key", "error");
-    if (isMobileViewport()) {
-      setMobileView("settings");
-    }
-  }, [addReviewNotice, appendActivity, setMobileView, setStatus]);
+    navigate("/setup");
+  }, [addReviewNotice, appendActivity, navigate, setStatus]);
 
   const handleMissingShellCommand = useCallback(() => {
     appendTerminal("\n[error] Enter a shell command after !.\n");
@@ -807,22 +818,18 @@ export function App() {
 
   const handleBeforeAgentSubmit = useCallback(
     (prompt: string) => {
-      if (isMobileViewport()) {
-        setMobileView("console");
-      }
+      navigate("/review");
       appendActivity(`\nuser> ${prompt}\n`);
     },
-    [appendActivity, setMobileView],
+    [appendActivity, navigate],
   );
 
   const handleShellSubmit = useCallback(
     async (command: string) => {
-      if (isMobileViewport()) {
-        setMobileView("console");
-      }
+      navigate("/review");
       await runManualShell(command);
     },
-    [runManualShell, setMobileView],
+    [navigate, runManualShell],
   );
 
   const handleAbortAgent = useCallback(() => {
@@ -897,7 +904,6 @@ export function App() {
     };
   }, [ensureStarterWorkspace, refreshWorkspaceTree, setStatus, workspace]);
 
-  const hasSavedApiKey = savedApiKey.trim().length > 0;
   const setupCopy = hasSavedApiKey
     ? "Key and model stay in this browser."
     : "Save a key to unlock agent prompts. Shell commands already work.";
@@ -915,7 +921,7 @@ export function App() {
         },
       }}
     >
-      <div className="app" id="app" data-mobile-view={mobileView}>
+      <div className="app" id="app" data-route={currentRoute}>
         <header className="hero">
           <div className="brand-lockup">
             <h1>just-pi</h1>
@@ -936,133 +942,25 @@ export function App() {
           </div>
         </header>
 
-        <section className="panel controls" data-state={appDataState} data-expanded={isSetupExpanded ? "true" : "false"}>
-          <div className="panel-header surface-header controls-header">
-            <div>
-              <h2>Setup</h2>
-              <p className="panel-copy">{setupCopy}</p>
-            </div>
-            {hasSavedApiKey ? (
-              <button
-                id="toggle-setup"
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setIsSetupExpanded((current) => !current);
-                }}
-              >
-                {isSetupExpanded ? "Hide setup" : "Edit setup"}
-              </button>
-            ) : null}
-          </div>
-
-          {hasSavedApiKey && !isSetupExpanded ? (
-            <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
-          ) : (
-            <>
-              <div className="control-grid">
-                <label className="field">
-                  <span>OpenRouter API key</span>
-                  <input
-                    id="api-key"
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder="sk-or-v1-..."
-                    value={apiKeyInput}
-                    onChange={(event) => setApiKeyInput(event.target.value)}
-                  />
-                  <span className="field-note">Stored only in this browser via localStorage.</span>
-                </label>
-
-                <label className="field">
-                  <span>Model</span>
-                  <input
-                    id="model-id"
-                    type="text"
-                    list="model-options"
-                    spellCheck={false}
-                    placeholder="openrouter/free"
-                    value={modelIdInput}
-                    onChange={(event) => setModelIdInput(event.target.value)}
-                    onFocus={() => {
-                      void loadModelOptions();
-                    }}
-                  />
-                  <datalist id="model-options">
-                    {modelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId} />
-                    ))}
-                  </datalist>
-                  <span className="field-note">
-                    Defaults to <code>openrouter/free</code>.
-                  </span>
-                </label>
-              </div>
-
-              <div className="button-row">
-                <button id="save-settings" type="button" onClick={() => void saveSettings()}>
-                  Save settings
-                </button>
-                <button id="clear-transcript" type="button" className="secondary-button" onClick={clearTranscript}>
-                  Clear transcript
-                </button>
-                <button id="reset-workspace" type="button" className="secondary-button" onClick={() => void resetWorkspace()}>
-                  Reset workspace
-                </button>
-                <button id="refresh-workspace" type="button" className="secondary-button" onClick={() => void refreshWorkspaceTree()}>
-                  Refresh files
-                </button>
-              </div>
-
-              {hasSavedApiKey ? (
-                <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
-              ) : (
-                <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
-                  <div>
-                    <h3 id="onboarding-title">Quick start</h3>
-                    <p id="onboarding-text" className="panel-copy">
-                      Save a key for agent prompts, or start now with <code>!</code> in Drive.
-                    </p>
-                  </div>
-                  <div className="button-row onboarding-actions">
-                    {QUICK_ACTIONS.map((action) => (
-                      <button
-                        key={action.label}
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          setMobileView("command");
-                          commandBarRef.current?.setText(action.value);
-                        }}
-                      >
-                        {action.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-        </section>
-
-        <nav className="mobile-nav" aria-label="Quick view switcher">
+        <nav className="surface-nav" aria-label="Primary surfaces">
           {([
-            ["settings", "Setup"],
-            ["command", "Drive"],
-            ["console", "Review"],
-            ["workspace", "Files"],
-          ] as const).map(([view, label]) => (
+            ["/setup", "Setup"],
+            ["/drive", "Drive"],
+            ["/review", "Review"],
+            ["/files", "Files"],
+          ] as const).map(([path, label]) => (
             <button
-              key={view}
+              key={path}
               type="button"
-              className={`mobile-tab${mobileView === view ? " is-active" : ""}`}
-              data-mobile-target={view}
-              aria-pressed={mobileView === view}
+              className={`surface-link${currentRoute === path ? " is-active" : ""}`}
+              data-route-target={path}
+              aria-pressed={currentRoute === path}
               onClick={() => {
-                setMobileView(view);
-                if (view === "command") {
-                  focusPromptInput();
+                navigate(path);
+                if (path === "/drive") {
+                  window.requestAnimationFrame(() => {
+                    focusPromptInput();
+                  });
                 }
               }}
             >
@@ -1071,166 +969,284 @@ export function App() {
           ))}
         </nav>
 
-        <main className="main-grid">
-          <section className="panel console-panel">
-            <div className="panel-header surface-header">
-              <div>
-                <h2>Review</h2>
-                <p className="panel-copy">Timeline first; traces stay below.</p>
+        <main className="route-shell" data-route={currentRoute}>
+          {currentRoute === "/setup" ? (
+            <section className="panel controls" data-state={appDataState} data-expanded={isSetupExpanded ? "true" : "false"}>
+              <div className="panel-header surface-header controls-header">
+                <div>
+                  <h2>Setup</h2>
+                  <p className="panel-copy">{setupCopy}</p>
+                </div>
+                {hasSavedApiKey ? (
+                  <button
+                    id="toggle-setup"
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setIsSetupExpanded((current) => !current);
+                    }}
+                  >
+                    {isSetupExpanded ? "Hide setup" : "Edit setup"}
+                  </button>
+                ) : null}
               </div>
-            </div>
 
-            <div className="console-stack">
-              <AssistantReviewPane
-                storageKey={STORAGE_KEYS.assistantThread}
-                reviewLogId="review-log"
-                viewportRef={reviewLogRef}
-                supplementalCount={reviewEntries.length}
-                emptyState={
-                  <div className="review-empty-state">
-                    <p className="review-empty-title">{hasSavedApiKey ? "Drive to begin." : "Review is waiting on Drive."}</p>
-                    <p className="review-empty-copy">
-                      {hasSavedApiKey ? (
-                        <>Review records prompts, tools, and shell output.</>
-                      ) : (
-                        <>Shell commands already land here. Save a key to add agent prompts.</>
-                      )}
-                    </p>
+              {hasSavedApiKey && !isSetupExpanded ? (
+                <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
+              ) : (
+                <>
+                  <div className="control-grid">
+                    <label className="field">
+                      <span>OpenRouter API key</span>
+                      <input
+                        id="api-key"
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="sk-or-v1-..."
+                        value={apiKeyInput}
+                        onChange={(event) => setApiKeyInput(event.target.value)}
+                      />
+                      <span className="field-note">Stored only in this browser via localStorage.</span>
+                    </label>
+
+                    <label className="field">
+                      <span>Model</span>
+                      <input
+                        id="model-id"
+                        type="text"
+                        list="model-options"
+                        spellCheck={false}
+                        placeholder="openrouter/free"
+                        value={modelIdInput}
+                        onChange={(event) => setModelIdInput(event.target.value)}
+                        onFocus={() => {
+                          void loadModelOptions();
+                        }}
+                      />
+                      <datalist id="model-options">
+                        {modelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId} />
+                        ))}
+                      </datalist>
+                      <span className="field-note">
+                        Defaults to <code>openrouter/free</code>.
+                      </span>
+                    </label>
                   </div>
-                }
-                supplementalEntries={reviewEntries.map((entry) => (
-                  <ReviewEntryView key={entry.id} entry={entry} />
-                ))}
-              />
 
-              <div className="console-grid">
-                <section className="console-section console-section-terminal">
-                  <div className="console-section-header">
-                    <h3>Shell output</h3>
+                  <div className="button-row">
+                    <button id="save-settings" type="button" onClick={() => void saveSettings()}>
+                      Save settings
+                    </button>
+                    <button id="clear-transcript" type="button" className="secondary-button" onClick={clearTranscript}>
+                      Clear transcript
+                    </button>
+                    <button id="reset-workspace" type="button" className="secondary-button" onClick={() => void resetWorkspace()}>
+                      Reset workspace
+                    </button>
+                    <button id="refresh-workspace" type="button" className="secondary-button" onClick={() => void refreshWorkspaceTree()}>
+                      Refresh files
+                    </button>
                   </div>
-                  <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
-                    {terminalText}
-                  </pre>
-                </section>
 
-                <section className="console-section console-section-activity">
-                  <div className="console-section-header">
-                    <h3>Tool stream</h3>
-                  </div>
-                  <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
-                    {activityText}
-                  </pre>
-                </section>
-              </div>
-            </div>
-          </section>
-
-          <aside className="panel workspace-panel">
-            <div className="panel-header surface-header">
-              <div>
-                <h2>Files</h2>
-                <p className="panel-copy">Working set in OPFS.</p>
-              </div>
-            </div>
-            <div className="workspace-browser">
-              <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
-                {workspaceEntries.map((entry) =>
-                  entry.kind === "directory" ? (
-                    <div
-                      key={entry.path}
-                      className="workspace-node workspace-node-directory"
-                      style={{ ["--depth" as string]: String(entry.depth) }}
-                    >
-                      {`▾ ${entry.name}`}
-                    </div>
+                  {hasSavedApiKey ? (
+                    <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
                   ) : (
-                    <button
-                      key={entry.path}
-                      type="button"
-                      className={`workspace-node${entry.path === activeFilePath ? " is-active" : ""}`}
-                      style={{ ["--depth" as string]: String(entry.depth) }}
-                      onClick={() => void openWorkspaceFile(entry.path)}
-                    >
-                      {entry.name}
-                    </button>
-                  ),
-                )}
+                    <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
+                      <div>
+                        <h3 id="onboarding-title">Quick start</h3>
+                        <p id="onboarding-text" className="panel-copy">
+                          Save a key for agent prompts, or start now with <code>!</code> in Drive.
+                        </p>
+                      </div>
+                      <div className="button-row onboarding-actions">
+                        {QUICK_ACTIONS.map((action) => (
+                          <button
+                            key={action.label}
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => {
+                              navigate("/drive");
+                              setPendingDriveText(action.value);
+                            }}
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </>
+              )}
+            </section>
+          ) : null}
+
+          {currentRoute === "/drive" ? (
+            <section className="route-drive">
+              <AssistantCommandBar
+                ref={commandBarRef}
+                isReady={isReady}
+                isBusy={isBusy}
+                agentEnabled={hasSavedApiKey}
+                fallbackSuggestions={QUICK_ACTIONS.map((action) => ({
+                  label: action.label,
+                  prompt: action.value,
+                }))}
+                onRunShell={handleShellSubmit}
+                onMissingAgentKey={handleMissingAgentKey}
+                onMissingShellCommand={handleMissingShellCommand}
+                onBeforeAgentSubmit={handleBeforeAgentSubmit}
+                onAbortAgent={handleAbortAgent}
+                onAttachmentError={handleAttachmentError}
+                attachmentAccept={TEXT_ATTACHMENT_ACCEPT}
+              />
+            </section>
+          ) : null}
+
+          {currentRoute === "/review" ? (
+            <section className="panel console-panel">
+              <div className="panel-header surface-header">
+                <div>
+                  <h2>Review</h2>
+                  <p className="panel-copy">Timeline first; traces stay below.</p>
+                </div>
               </div>
 
-              <section className="file-viewer">
-                <div className="file-viewer-header">
-                  <div>
-                    <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "Working set"}</h3>
-                    <p id="file-subtitle" className="file-subtitle">
-                      {activeFilePath ? activeFilePath : "Open a file to inspect or edit the working set."}
-                    </p>
-                  </div>
+              <div className="console-stack">
+                <AssistantReviewPane
+                  storageKey={STORAGE_KEYS.assistantThread}
+                  reviewLogId="review-log"
+                  viewportRef={reviewLogRef}
+                  supplementalCount={reviewEntries.length}
+                  emptyState={
+                    <div className="review-empty-state">
+                      <p className="review-empty-title">{hasSavedApiKey ? "Drive to begin." : "Review is waiting on Drive."}</p>
+                      <p className="review-empty-copy">
+                        {hasSavedApiKey ? (
+                          <>Review records prompts, tools, and shell output.</>
+                        ) : (
+                          <>Shell commands already land here. Save a key to add agent prompts.</>
+                        )}
+                      </p>
+                    </div>
+                  }
+                  supplementalEntries={reviewEntries.map((entry) => (
+                    <ReviewEntryView key={entry.id} entry={entry} />
+                  ))}
+                />
 
-                  <div className="button-row file-actions">
-                    <button
-                      id="file-reload"
-                      type="button"
-                      className="secondary-button"
-                      disabled={!activeFilePath}
-                      onClick={async () => {
-                        if (!activeFilePathRef.current) {
-                          return;
-                        }
-                        if (fileEditorDirtyRef.current) {
-                          const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
-                          if (!shouldDiscard) {
-                            return;
-                          }
-                        }
-                        await loadWorkspaceFile(activeFilePathRef.current);
-                      }}
-                    >
-                      Reload file
-                    </button>
-                    <button id="file-save" type="button" disabled={!activeFilePath || !fileEditorDirty} onClick={() => void saveActiveFile()}>
-                      Save file
-                    </button>
-                  </div>
+                <div className="console-grid">
+                  <section className="console-section console-section-terminal">
+                    <div className="console-section-header">
+                      <h3>Shell output</h3>
+                    </div>
+                    <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                      {terminalText}
+                    </pre>
+                  </section>
+
+                  <section className="console-section console-section-activity">
+                    <div className="console-section-header">
+                      <h3>Tool stream</h3>
+                    </div>
+                    <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                      {activityText}
+                    </pre>
+                  </section>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {currentRoute === "/files" ? (
+            <aside className="panel workspace-panel">
+              <div className="panel-header surface-header">
+                <div>
+                  <h2>Files</h2>
+                  <p className="panel-copy">Working set in OPFS.</p>
+                </div>
+              </div>
+              <div className="workspace-browser">
+                <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
+                  {workspaceEntries.map((entry) =>
+                    entry.kind === "directory" ? (
+                      <div
+                        key={entry.path}
+                        className="workspace-node workspace-node-directory"
+                        style={{ ["--depth" as string]: String(entry.depth) }}
+                      >
+                        {`▾ ${entry.name}`}
+                      </div>
+                    ) : (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        className={`workspace-node${entry.path === activeFilePath ? " is-active" : ""}`}
+                        style={{ ["--depth" as string]: String(entry.depth) }}
+                        onClick={() => void openWorkspaceFile(entry.path)}
+                      >
+                        {entry.name}
+                      </button>
+                    ),
+                  )}
                 </div>
 
-                <textarea
-                  id="file-editor"
-                  className="file-editor"
-                  spellCheck={false}
-                  placeholder="Open a file from the working set to inspect or edit it."
-                  disabled={!activeFilePath}
-                  value={fileEditorContent}
-                  onChange={(event) => {
-                    setFileEditorContent(event.target.value);
-                    if (activeFilePath) {
-                      setFileEditorDirty(true);
-                    }
-                  }}
-                />
-              </section>
-            </div>
-          </aside>
-        </main>
+                <section className="file-viewer">
+                  <div className="file-viewer-header">
+                    <div>
+                      <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "Working set"}</h3>
+                      <p id="file-subtitle" className="file-subtitle">
+                        {activeFilePath ? activeFilePath : "Open a file to inspect or edit the working set."}
+                      </p>
+                    </div>
 
-        <section className="input-grid">
-          <AssistantCommandBar
-            ref={commandBarRef}
-            isReady={isReady}
-            isBusy={isBusy}
-            agentEnabled={hasSavedApiKey}
-            fallbackSuggestions={QUICK_ACTIONS.map((action) => ({
-              label: action.label,
-              prompt: action.value,
-            }))}
-            onRunShell={handleShellSubmit}
-            onMissingAgentKey={handleMissingAgentKey}
-            onMissingShellCommand={handleMissingShellCommand}
-            onBeforeAgentSubmit={handleBeforeAgentSubmit}
-            onAbortAgent={handleAbortAgent}
-            onAttachmentError={handleAttachmentError}
-            attachmentAccept={TEXT_ATTACHMENT_ACCEPT}
-          />
-        </section>
+                    <div className="button-row file-actions">
+                      <button
+                        id="file-reload"
+                        type="button"
+                        className="secondary-button"
+                        disabled={!activeFilePath}
+                        onClick={async () => {
+                          if (!activeFilePathRef.current) {
+                            return;
+                          }
+                          if (fileEditorDirtyRef.current) {
+                            const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
+                            if (!shouldDiscard) {
+                              return;
+                            }
+                          }
+                          await loadWorkspaceFile(activeFilePathRef.current);
+                        }}
+                      >
+                        Reload file
+                      </button>
+                      <button id="file-save" type="button" disabled={!activeFilePath || !fileEditorDirty} onClick={() => void saveActiveFile()}>
+                        Save file
+                      </button>
+                    </div>
+                  </div>
+
+                  <textarea
+                    id="file-editor"
+                    className="file-editor"
+                    spellCheck={false}
+                    placeholder="Open a file from the working set to inspect or edit it."
+                    disabled={!activeFilePath}
+                    value={fileEditorContent}
+                    onChange={(event) => {
+                      setFileEditorContent(event.target.value);
+                      if (activeFilePath) {
+                        setFileEditorDirty(true);
+                      }
+                    }}
+                  />
+                </section>
+              </div>
+            </aside>
+          ) : null}
+        </main>
       </div>
     </AssistantRuntimeScope>
   );

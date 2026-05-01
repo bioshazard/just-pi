@@ -121,18 +121,16 @@ textarea {
   gap: var(--panel-gap);
   grid-template-areas:
     "hero"
-    "controls"
-    "main"
-    "input";
-  grid-template-rows: auto auto minmax(0, 1fr) minmax(190px, 0.48fr);
+    "nav"
+    "view";
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
 .hero,
 .control-grid,
 .button-row,
-.main-grid,
-.input-grid,
+.route-shell,
 .panel-header {
   display: grid;
   gap: var(--panel-gap);
@@ -259,10 +257,6 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.controls {
-  grid-area: controls;
-}
-
 .controls[data-state="ready"] {
   background: rgba(8, 12, 24, 0.56);
 }
@@ -280,19 +274,23 @@ h2 {
   margin-bottom: 0.35rem;
 }
 
-.mobile-nav {
-  display: none;
+.surface-nav {
+  grid-area: nav;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
 }
 
-.mobile-tab {
+.surface-link {
   border: 1px solid rgba(142, 158, 196, 0.18);
   background: rgba(10, 15, 30, 0.82);
   color: #c9d6f3;
   box-shadow: none;
 }
 
-.mobile-tab.is-active {
-  background: linear-gradient(180deg, #4a6cf7, #3653c6);
+.surface-link.is-active {
+  border-color: rgba(74, 108, 247, 0.28);
+  background: rgba(74, 108, 247, 0.18);
   color: #f8fbff;
 }
 
@@ -326,15 +324,17 @@ h2 {
   box-shadow: none;
 }
 
-.main-grid {
-  grid-area: main;
-  grid-template-columns: minmax(0, 1.1fr) minmax(460px, 1.3fr);
+.route-shell {
+  grid-area: view;
   min-height: 0;
 }
 
-.input-grid {
-  grid-area: input;
-  grid-template-columns: minmax(0, 1fr);
+.route-shell > * {
+  min-height: 0;
+}
+
+.route-drive {
+  display: grid;
   min-height: 0;
 }
 
@@ -1011,11 +1011,6 @@ h2 {
   color: #f0c47f;
 }
 
-.main-grid > *,
-.input-grid > * {
-  min-height: 0;
-}
-
 @media (max-width: 980px) {
   html,
   body {
@@ -1028,8 +1023,6 @@ h2 {
   }
 
   .hero,
-  .main-grid,
-  .input-grid,
   .control-grid,
   .workspace-browser {
     grid-template-columns: 1fr;
@@ -1038,11 +1031,6 @@ h2 {
   .app {
     height: 100svh;
     min-height: 100svh;
-    grid-template-areas:
-      "hero"
-      "nav"
-      "view";
-    grid-template-rows: auto auto minmax(0, 1fr);
     overflow: hidden;
   }
 
@@ -1071,13 +1059,6 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .mobile-nav {
-    grid-area: nav;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.5rem;
-  }
-
   .repo-link {
     justify-content: center;
   }
@@ -1086,36 +1067,16 @@ h2 {
     width: 100%;
   }
 
+  .route-shell,
   .controls,
-  .main-grid,
-  .input-grid {
-    grid-area: view;
+  .console-panel,
+  .workspace-panel,
+  .route-drive {
     min-height: 0;
   }
 
-  .controls {
+  .route-shell {
     overflow: auto;
-  }
-
-  .main-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .app[data-mobile-view="settings"] .main-grid,
-  .app[data-mobile-view="settings"] .input-grid,
-  .app[data-mobile-view="command"] .controls,
-  .app[data-mobile-view="command"] .main-grid,
-  .app[data-mobile-view="console"] .controls,
-  .app[data-mobile-view="console"] .input-grid,
-  .app[data-mobile-view="workspace"] .controls,
-  .app[data-mobile-view="workspace"] .input-grid,
-  .app[data-mobile-view="console"] .workspace-panel,
-  .app[data-mobile-view="workspace"] .console-panel {
-    display: none;
-  }
-
-  .app[data-mobile-view="console"] .console-grid {
-    display: none;
   }
 
   .review-entry-user,
@@ -1150,35 +1111,7 @@ h2 {
   }
 
   .workspace-tree {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.45rem;
-    min-height: auto;
-    padding: 0.65rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    white-space: nowrap;
-    scroll-snap-type: x proximity;
-  }
-
-  .workspace-node,
-  .workspace-node-directory {
-    width: auto;
-    flex: 0 0 auto;
-    align-self: flex-start;
-    padding: 0.45rem 0.75rem;
-    border-radius: 999px;
-    scroll-snap-align: start;
-  }
-
-  .workspace-node {
-    border-color: rgba(142, 158, 196, 0.18);
-    background: rgba(142, 158, 196, 0.08);
-  }
-
-  .workspace-node-directory {
-    border: 1px solid rgba(142, 158, 196, 0.14);
-    background: rgba(12, 18, 35, 0.72);
+    min-height: 12rem;
   }
 
   .file-editor {
@@ -1219,10 +1152,6 @@ h2 {
 
   .input-hint {
     display: none;
-  }
-
-  .app[data-mobile-view="console"] .console-stack {
-    grid-template-rows: minmax(0, 1fr);
   }
 
   .input-footer .button-row {
