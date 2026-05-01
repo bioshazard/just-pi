@@ -954,12 +954,21 @@ export function App() {
               storageKey={STORAGE_KEYS.assistantThread}
               reviewLogId="review-log"
               viewportRef={reviewLogRef}
-              hasSupplementalEntries={reviewEntries.length > 0}
+              agentEnabled={hasSavedApiKey}
+              supplementalCount={reviewEntries.length}
               emptyState={
                 <div className="review-empty-state">
-                  <p className="review-empty-title">Review is ready.</p>
+                  <p className="review-empty-title">{hasSavedApiKey ? "Review is ready." : "Save a key to unlock assistant review."}</p>
                   <p className="review-empty-copy">
-                    Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
+                    {hasSavedApiKey ? (
+                      <>
+                        Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
+                      </>
+                    ) : (
+                      <>
+                        Plain-text prompts need an OpenRouter API key first. Commands that start with <code>!</code> already stay inline here as command cards.
+                      </>
+                    )}
                   </p>
                 </div>
               }
