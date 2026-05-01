@@ -3,8 +3,10 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAuiState,
+  useMessagePartFile,
   type MessageState,
   type ThreadMessageLike,
+  type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { useEffect, type ReactNode, type Ref } from "react";
 
@@ -48,6 +50,53 @@ function getMessageText(message: Pick<MessageState, "content">): string {
 
 function toCountLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatToolValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function AssistantToolPart({ toolName, argsText, result, isError, status }: ToolCallMessagePartProps) {
+  const toolStatus = isError ? "error" : status.type === "running" ? "running" : result === undefined ? "queued" : "complete";
+
+  return (
+    <section className="assistant-tool-card" data-status={toolStatus}>
+      <div className="assistant-tool-header">
+        <span className="assistant-tool-name">{toolName}</span>
+        <span className="assistant-tool-status" data-status={toolStatus}>
+          {toolStatus}
+        </span>
+      </div>
+      <div className="assistant-tool-section">
+        <span className="assistant-tool-label">args</span>
+        <pre className="assistant-tool-body">{argsText}</pre>
+      </div>
+      {result !== undefined ? (
+        <div className="assistant-tool-section">
+          <span className="assistant-tool-label">{isError ? "error" : "result"}</span>
+          <pre className="assistant-tool-body">{formatToolValue(result)}</pre>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function AssistantFilePart() {
+  const file = useMessagePartFile();
+
+  return (
+    <div className="assistant-file-part">
+      <span className="assistant-file-name">{file.filename || "attachment"}</span>
+      <span className="assistant-file-meta">{file.mimeType || "file"}</span>
+    </div>
+  );
 }
 
 function AssistantReviewSummary({
@@ -140,6 +189,10 @@ function AssistantReviewMessage() {
         <MessagePrimitive.Parts
           components={{
             Text: () => <MessagePartPrimitive.Text component="span" smooth />,
+            File: AssistantFilePart,
+            tools: {
+              Fallback: AssistantToolPart,
+            },
           }}
         />
       </div>

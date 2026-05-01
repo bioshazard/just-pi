@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Agent } from "@mariozechner/pi-agent-core";
+import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
   type ChatModelAdapter,
   type ChatModelRunResult,
+  type LocalRuntimeOptions,
   type ThreadMessage,
 } from "@assistant-ui/react";
 import type { ShellRuntime } from "./shell";
 
 import { AssistantCommandBar, type AssistantCommandBarHandle } from "./AssistantCommandBar";
 import { AssistantReviewPane, readStoredAssistantMessages } from "./AssistantReviewPane";
+import { TEXT_ATTACHMENT_ACCEPT, WorkspaceTextAttachmentAdapter } from "./assistant-attachments";
 import {
   formatAssistantDelta,
   formatToolEvent,
@@ -46,8 +48,11 @@ interface ReviewEntryViewProps {
 interface AssistantRuntimeScopeProps {
   adapter: ChatModelAdapter;
   storageKey: string;
+  runtimeOptions?: Omit<LocalRuntimeOptions, "initialMessages">;
   children: ReactNode;
 }
+
+type AssistantContentPart = NonNullable<ChatModelRunResult["content"]>[number];
 
 function getLatestUserPrompt(messages: readonly ThreadMessage[]): string {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
@@ -55,10 +60,67 @@ function getLatestUserPrompt(messages: readonly ThreadMessage[]): string {
     return "";
   }
   return lastUserMessage.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
+    .map((part) => {
+      if (part.type === "text") {
+        return part.text;
+      }
+      if (part.type === "file") {
+        const fileName = part.filename || "attachment";
+        return `<attachment name="${fileName}" mime="${part.mimeType}">\n${part.data}\n</attachment>`;
+      }
+      return "";
+    })
+    .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function stringifyToolValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function appendAssistantTextPart(parts: readonly AssistantContentPart[], delta: string): AssistantContentPart[] {
+  if (!delta) {
+    return [...parts];
+  }
+  const lastPart = parts[parts.length - 1];
+  if (lastPart?.type === "text") {
+    return [...parts.slice(0, -1), { ...lastPart, text: lastPart.text + delta }];
+  }
+  return [...parts, { type: "text", text: delta }];
+}
+
+function upsertToolCallPart(parts: readonly AssistantContentPart[], event: Extract<AgentEvent, { type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end" }>): AssistantContentPart[] {
+  const existingPart = parts.find((part) => part.type === "tool-call" && part.toolCallId === event.toolCallId);
+  const args = "args" in event ? event.args : existingPart?.type === "tool-call" ? existingPart.args : {};
+  const nextPart: Extract<AssistantContentPart, { type: "tool-call" }> = {
+    type: "tool-call",
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+    args,
+    argsText: stringifyToolValue(args),
+    ...(event.type === "tool_execution_update"
+      ? { result: event.partialResult }
+      : event.type === "tool_execution_end"
+        ? { result: event.result, isError: event.isError }
+        : {}),
+  };
+
+  const nextParts = [...parts];
+  const existingIndex = nextParts.findIndex((part) => part.type === "tool-call" && part.toolCallId === nextPart.toolCallId);
+  if (existingIndex === -1) {
+    nextParts.push(nextPart);
+  } else {
+    nextParts[existingIndex] = nextPart;
+  }
+  return nextParts;
 }
 
 const QUICK_ACTIONS = [
@@ -140,9 +202,9 @@ function ReviewEntryView({ entry }: ReviewEntryViewProps) {
   );
 }
 
-function AssistantRuntimeScope({ adapter, storageKey, children }: AssistantRuntimeScopeProps) {
+function AssistantRuntimeScope({ adapter, storageKey, runtimeOptions, children }: AssistantRuntimeScopeProps) {
   const initialMessages = useMemo(() => readStoredAssistantMessages(storageKey), [storageKey]);
-  const runtime = useLocalRuntime(adapter, { initialMessages });
+  const runtime = useLocalRuntime(adapter, { initialMessages, ...runtimeOptions });
 
   return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
 }
@@ -190,6 +252,32 @@ export function App() {
   const [fileEditorContent, setFileEditorContent] = useState("");
   const [fileEditorDirty, setFileEditorDirty] = useState(false);
   const [isReady, setIsReady] = useState(false);
+
+  const suggestionAdapter = useMemo(
+    () => ({
+      async generate({ messages }: { messages: readonly ThreadMessage[] }) {
+        const lastMessage = [...messages].reverse().find((message) => message.role !== "system");
+        if (!lastMessage) {
+          return QUICK_ACTIONS.map((action) => ({ prompt: action.value }));
+        }
+        if (lastMessage.role === "assistant") {
+          return [
+            { prompt: "Apply that in the workspace." },
+            { prompt: "Explain which files matter most." },
+            { prompt: "What should I do next?" },
+          ];
+        }
+        return [
+          { prompt: "Continue." },
+          { prompt: "Be more concrete." },
+          { prompt: "Summarize the workspace and explain what I can do here." },
+        ];
+      },
+    }),
+    [],
+  );
+
+  const attachmentAdapter = useMemo(() => new WorkspaceTextAttachmentAdapter(), []);
 
   useEffect(() => {
     return () => {
@@ -499,6 +587,7 @@ export function App() {
         await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
 
         let assistantText = "";
+        let assistantParts: AssistantContentPart[] = [];
         let assistantBlockOpen = false;
         let isDone = false;
         let nextResultResolver: ((result: IteratorResult<ChatModelRunResult>) => void) | null = null;
@@ -512,6 +601,13 @@ export function App() {
             return;
           }
           queuedResults.push(result);
+        };
+
+        const pushAssistantState = (status: ChatModelRunResult["status"]) => {
+          pushResult({
+            status,
+            ...(assistantParts.length > 0 ? { content: [...assistantParts] } : {}),
+          });
         };
 
         const finish = () => {
@@ -547,6 +643,15 @@ export function App() {
             appendActivity(toolText);
           }
 
+          if (
+            event.type === "tool_execution_start" ||
+            event.type === "tool_execution_update" ||
+            event.type === "tool_execution_end"
+          ) {
+            assistantParts = upsertToolCallPart(assistantParts, event);
+            pushAssistantState({ type: "running" });
+          }
+
           if (shouldOpenAssistantBlock(event)) {
             assistantBlockOpen = true;
             appendActivity("\nassistant> ");
@@ -555,10 +660,9 @@ export function App() {
           const delta = formatAssistantDelta(event);
           if (delta) {
             assistantText += delta;
+            assistantParts = appendAssistantTextPart(assistantParts, delta);
             appendActivity(delta);
-            pushResult({
-              content: [{ type: "text", text: assistantText }],
-            });
+            pushAssistantState({ type: "running" });
           }
 
           if (shouldCloseAssistantBlock(event) && assistantBlockOpen) {
@@ -578,6 +682,7 @@ export function App() {
             setStatus("Idle", "idle");
             setIsBusy(false);
             await refreshWorkspaceTree();
+            pushAssistantState({ type: "complete", reason: "stop" });
             finish();
           }
         });
@@ -728,6 +833,15 @@ export function App() {
     appendActivity("\n[agent] abort requested.\n");
   }, [addReviewNotice, appendActivity]);
 
+  const handleAttachmentError = useCallback(
+    (message: string) => {
+      addReviewNotice(message, "error");
+      appendActivity(`\n[attachment error] ${message}\n`);
+      setStatus("Attachment error", "error");
+    },
+    [addReviewNotice, appendActivity, setStatus],
+  );
+
   const resetWorkspace = useCallback(async () => {
     const confirmed = window.confirm("Reset the OPFS workspace? This removes all files created in just-pi.");
     if (!confirmed) {
@@ -795,7 +909,17 @@ export function App() {
   const appDataState = hasSavedApiKey ? "ready" : "setup";
 
   return (
-    <AssistantRuntimeScope key={`${assistantThreadKey}`} adapter={assistantAdapter} storageKey={STORAGE_KEYS.assistantThread}>
+    <AssistantRuntimeScope
+      key={`${assistantThreadKey}`}
+      adapter={assistantAdapter}
+      storageKey={STORAGE_KEYS.assistantThread}
+      runtimeOptions={{
+        adapters: {
+          suggestion: suggestionAdapter,
+          attachments: attachmentAdapter,
+        },
+      }}
+    >
       <div className="app" id="app" data-mobile-view={mobileView}>
         <header className="hero">
           <div className="brand-lockup">
@@ -1075,11 +1199,14 @@ export function App() {
             isReady={isReady}
             isBusy={isBusy}
             agentEnabled={hasSavedApiKey}
+            fallbackSuggestions={QUICK_ACTIONS.map((action) => action.value)}
             onRunShell={handleShellSubmit}
             onMissingAgentKey={handleMissingAgentKey}
             onMissingShellCommand={handleMissingShellCommand}
             onBeforeAgentSubmit={handleBeforeAgentSubmit}
             onAbortAgent={handleAbortAgent}
+            onAttachmentError={handleAttachmentError}
+            attachmentAccept={TEXT_ATTACHMENT_ACCEPT}
           />
         </section>
       </div>

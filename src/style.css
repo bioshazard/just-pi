@@ -585,6 +585,104 @@ h2 {
   margin: 0;
 }
 
+.assistant-tool-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+  background: rgba(4, 7, 16, 0.7);
+}
+
+.assistant-tool-card[data-status="running"] {
+  border-color: rgba(74, 108, 247, 0.28);
+}
+
+.assistant-tool-card[data-status="error"] {
+  border-color: rgba(196, 59, 59, 0.26);
+  background: rgba(196, 59, 59, 0.08);
+}
+
+.assistant-tool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.assistant-tool-name {
+  color: #d7e0f6;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.assistant-tool-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+  color: #93a6d2;
+  font-size: 0.7rem;
+  text-transform: lowercase;
+}
+
+.assistant-tool-status[data-status="running"] {
+  border-color: rgba(74, 108, 247, 0.28);
+  color: #bfd0ff;
+}
+
+.assistant-tool-status[data-status="error"] {
+  border-color: rgba(196, 59, 59, 0.26);
+  color: #ffc3c3;
+}
+
+.assistant-tool-section {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.assistant-tool-label {
+  color: #8ea3d3;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.assistant-tool-body {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 12px;
+  background: rgba(2, 5, 12, 0.78);
+  color: #d7e0f6;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-file-part {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+  background: rgba(142, 158, 196, 0.08);
+}
+
+.assistant-file-name {
+  color: #d7e0f6;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.assistant-file-meta {
+  color: #8ea3d3;
+  font-size: 0.72rem;
+}
+
 .review-entry-user,
 .review-entry-assistant {
   width: 100%;
@@ -879,6 +977,68 @@ h2 {
   gap: 0.2rem;
 }
 
+.command-attachments-row,
+.command-suggestions,
+.command-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.command-attachments-row,
+.command-suggestions {
+  align-items: center;
+}
+
+.command-suggestion,
+.attachment-button {
+  max-width: 100%;
+}
+
+.command-suggestion {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.command-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.35rem 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.18);
+  background: rgba(142, 158, 196, 0.08);
+  color: #d7e0f6;
+  font-size: 0.78rem;
+}
+
+.command-attachment-chip[data-status="incomplete"] {
+  border-color: rgba(196, 59, 59, 0.26);
+  background: rgba(196, 59, 59, 0.12);
+}
+
+.command-attachment-name {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-attachment-remove {
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 158, 196, 0.2);
+  background: rgba(4, 7, 16, 0.72);
+  color: #d7e0f6;
+  box-shadow: none;
+}
+
+.command-attachment-remove:hover:not(:disabled) {
+  transform: none;
+}
+
 .input-hint {
   margin: 0;
   color: #93a6d2;
@@ -1007,6 +1167,16 @@ h2 {
   .review-entry-user,
   .review-entry-assistant {
     max-width: 100%;
+  }
+
+  .command-attachments-row,
+  .command-suggestions,
+  .command-attachments {
+    gap: 0.45rem;
+  }
+
+  .command-attachment-name {
+    max-width: 12rem;
   }
 
   #prompt-form {
