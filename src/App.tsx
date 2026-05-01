@@ -955,7 +955,14 @@ export function App() {
               reviewLogId="review-log"
               viewportRef={reviewLogRef}
               hasSupplementalEntries={reviewEntries.length > 0}
-              emptyState={<p className="review-empty">Review timeline will appear here.</p>}
+              emptyState={
+                <div className="review-empty-state">
+                  <p className="review-empty-title">Review is ready.</p>
+                  <p className="review-empty-copy">
+                    Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
+                  </p>
+                </div>
+              }
               supplementalEntries={reviewEntries.map((entry) => (
                 <ReviewEntryView key={entry.id} entry={entry} />
               ))}

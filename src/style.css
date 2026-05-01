@@ -422,6 +422,36 @@ h2 {
   font-size: 0.84rem;
 }
 
+.review-empty-state {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(142, 158, 196, 0.16);
+  background: rgba(10, 15, 30, 0.78);
+}
+
+.review-empty-title,
+.review-empty-copy {
+  margin: 0;
+}
+
+.review-empty-title {
+  color: #d7e0f6;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.review-empty-copy {
+  color: #93a6d2;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.review-empty-copy code {
+  color: #bed0ff;
+}
+
 .review-entry {
   display: grid;
   gap: 0.4rem;
