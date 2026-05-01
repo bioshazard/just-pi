@@ -1,32 +1,16 @@
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
-import { getModels, streamSimple, type AssistantMessage, type TextContent } from "@mariozechner/pi-ai";
+import { Agent, type AgentTool } from "@mariozechner/pi-agent-core";
+import type { Model, TextContent } from "@mariozechner/pi-ai";
 import { Static, Type } from "typebox";
 
 import { OpfsWorkspace, basename, dirname, normalizePath } from "./opfs";
 import { ShellRuntime } from "./shell";
-
-export const OPENROUTER_MODELS = getModels("openrouter").map((model) => model.id);
-
-const DEFAULT_MODEL =
-  OPENROUTER_MODELS.find((modelId) => modelId === "openrouter/free") ?? OPENROUTER_MODELS[0] ?? "openrouter/free";
+import { getDefaultModelId, restoreMessages } from "./agent-session-ui";
 
 function textResult(text: string, details?: unknown) {
   return {
     content: [{ type: "text", text }] satisfies TextContent[],
     details,
   };
-}
-
-function ensureTextAssistant(message: AgentMessage): message is AssistantMessage {
-  return message.role === "assistant";
-}
-
-function serializeArgs(args: unknown): string {
-  try {
-    return JSON.stringify(args);
-  } catch {
-    return String(args);
-  }
 }
 
 function lineNumberedSlice(content: string, offset = 0, limit?: number): string {
@@ -242,19 +226,30 @@ function createAgentTools(workspace: OpfsWorkspace, shell: ShellRuntime): AgentT
   return [readTool, writeTool, editTool, lsTool, findTool, grepTool, bashTool];
 }
 
-export function getDefaultModelId(): string {
-  return DEFAULT_MODEL;
+async function loadPiAi() {
+  return import("@mariozechner/pi-ai");
 }
 
-export function resolveModelId(modelId: string): string {
-  return OPENROUTER_MODELS.includes(modelId) ? modelId : DEFAULT_MODEL;
+async function findOpenRouterModel(modelId: string): Promise<Model<string>> {
+  const { getModels } = await loadPiAi();
+  const models = getModels("openrouter") as Model<string>[];
+  const preferredId = modelId.trim() || getDefaultModelId();
+  return models.find((candidate) => candidate.id === preferredId) ?? models[0] ?? ({ id: getDefaultModelId() } as Model<string>);
 }
 
-export function createBrowserAgentSession(options: BrowserAgentSessionOptions): Agent {
-  const model = getModels("openrouter").find((candidate) => candidate.id === resolveModelId(options.readModelId()));
+export async function listOpenRouterModels(): Promise<string[]> {
+  const { getModels } = await loadPiAi();
+  const ids = getModels("openrouter").map((model) => model.id);
+  return ids.length > 0 ? ids : [getDefaultModelId()];
+}
+
+export async function createBrowserAgentSession(options: BrowserAgentSessionOptions): Promise<Agent> {
+  const model = await findOpenRouterModel(options.readModelId());
   if (!model) {
     throw new Error("No OpenRouter models available from pi-ai.");
   }
+
+  const { streamSimple } = await loadPiAi();
 
   const agent = new Agent({
     initialState: {
@@ -279,90 +274,17 @@ export function createBrowserAgentSession(options: BrowserAgentSessionOptions): 
   });
 
   localStorage.setItem("just-pi.session-id", agent.sessionId ?? crypto.randomUUID());
-
-  agent.subscribe(async (event: AgentEvent) => {
-    if (event.type === "message_end") {
-      localStorage.setItem("just-pi.messages", JSON.stringify(agent.state.messages));
-    }
-    if (event.type === "agent_end") {
-      localStorage.setItem("just-pi.messages", JSON.stringify(agent.state.messages));
-    }
-  });
+  agent.state.messages = restoreMessages();
 
   return agent;
 }
 
-export function restoreMessages(): AgentMessage[] {
-  const raw = localStorage.getItem("just-pi.messages");
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as AgentMessage[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function updateAgentConfiguration(agent: Agent, modelId: string, shell: ShellRuntime): void {
-  const model = getModels("openrouter").find((candidate) => candidate.id === resolveModelId(modelId));
+export async function updateAgentConfiguration(agent: Agent, modelId: string, shell: ShellRuntime): Promise<void> {
+  const model = await findOpenRouterModel(modelId);
   if (!model) {
     return;
   }
   agent.state.model = model;
   agent.state.thinkingLevel = model.reasoning ? "medium" : "off";
   agent.state.systemPrompt = buildSystemPrompt(shell.getCwd());
-}
-
-export function formatToolEvent(event: AgentEvent): string | null {
-  switch (event.type) {
-    case "tool_execution_start":
-      return `\n[tool:${event.toolName}] ${serializeArgs(event.args)}\n`;
-    case "tool_execution_update": {
-      const first = event.partialResult?.content?.[0];
-      return first?.type === "text" ? first.text : null;
-    }
-    case "tool_execution_end":
-      return event.toolName === "bash" ? `\n[tool:${event.toolName}] complete\n` : null;
-    default:
-      return null;
-  }
-}
-
-export function formatAssistantDelta(event: AgentEvent): string | null {
-  if (event.type !== "message_update") {
-    return null;
-  }
-  if (!ensureTextAssistant(event.message)) {
-    return null;
-  }
-  if (event.assistantMessageEvent.type === "text_delta") {
-    return event.assistantMessageEvent.delta;
-  }
-  return null;
-}
-
-export function shouldOpenAssistantBlock(event: AgentEvent): boolean {
-  return event.type === "message_start" && ensureTextAssistant(event.message);
-}
-
-export function shouldCloseAssistantBlock(event: AgentEvent): boolean {
-  return event.type === "message_end" && ensureTextAssistant(event.message);
-}
-
-export function getStarterWorkspaceFile(): { path: string; content: string } {
-  return {
-    path: "/README.md",
-    content: `# just-pi workspace
-
-This workspace lives in the browser's Origin Private File System (OPFS).
-
-Try:
-
-- \`ls\`
-- \`cat README.md\`
-- asking the agent to create a small project
-`,
-  };
 }

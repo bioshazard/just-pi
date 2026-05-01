@@ -1,20 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { Agent } from "@mariozechner/pi-agent-core";
+import type { ShellRuntime } from "./shell";
 
 import {
-  OPENROUTER_MODELS,
-  createBrowserAgentSession,
   formatAssistantDelta,
   formatToolEvent,
   getDefaultModelId,
   getStarterWorkspaceFile,
-  restoreMessages,
   shouldCloseAssistantBlock,
   shouldOpenAssistantBlock,
-  updateAgentConfiguration,
-} from "./agent-session";
+} from "./agent-session-ui";
 import { OpfsWorkspace, basename, type WorkspaceTreeEntry } from "./opfs";
-import { ShellRuntime } from "./shell";
 
 const STORAGE_KEYS = {
   apiKey: "just-pi.api-key",
@@ -113,9 +109,9 @@ function ReviewEntryView({ entry }: ReviewEntryViewProps) {
 export function App() {
   const savedApiKeyInitial = readStorageText(STORAGE_KEYS.apiKey);
   const savedModelInitial = readStorageText(STORAGE_KEYS.modelId, getDefaultModelId());
+  const savedCwdInitial = readStorageText(STORAGE_KEYS.shellCwd, "/");
 
   const workspace = useMemo(() => new OpfsWorkspace(), []);
-  const shell = useMemo(() => new ShellRuntime(workspace, STORAGE_KEYS.shellCwd), [workspace]);
 
   const agentRef = useRef<Agent | undefined>(undefined);
   const assistantBlockOpenRef = useRef(false);
@@ -124,6 +120,11 @@ export function App() {
   const savedModelIdRef = useRef(savedModelInitial);
   const activeFilePathRef = useRef<string | undefined>(undefined);
   const fileEditorDirtyRef = useRef(false);
+  const agentLoadPromiseRef = useRef<Promise<Agent> | undefined>(undefined);
+  const modelOptionsLoadRef = useRef<Promise<string[]> | undefined>(undefined);
+  const shellLoadPromiseRef = useRef<Promise<ShellRuntime> | undefined>(undefined);
+  const shellRef = useRef<ShellRuntime | undefined>(undefined);
+  const isMountedRef = useRef(true);
 
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const terminalRef = useRef<HTMLPreElement>(null);
@@ -132,6 +133,9 @@ export function App() {
 
   const [savedApiKey, setSavedApiKey] = useState(savedApiKeyInitial);
   const [savedModelId, setSavedModelId] = useState(savedModelInitial);
+  const [modelOptions, setModelOptions] = useState<string[]>(() =>
+    Array.from(new Set([getDefaultModelId(), savedModelInitial].filter(Boolean))),
+  );
   const [apiKeyInput, setApiKeyInput] = useState(savedApiKeyInitial);
   const [modelIdInput, setModelIdInput] = useState(savedModelInitial);
   const [terminalText, setTerminalText] = useState(() => readStorageText(STORAGE_KEYS.terminal));
@@ -140,7 +144,7 @@ export function App() {
   const [mobileView, setMobileViewState] = useState<MobileView>(() => readInitialMobileView(savedApiKeyInitial));
   const [statusLabel, setStatusLabel] = useState("Idle");
   const [statusTone, setStatusTone] = useState<StatusTone>("idle");
-  const [cwd, setCwd] = useState(() => shell.getCwd());
+  const [cwd, setCwd] = useState(savedCwdInitial);
   const [isBusy, setIsBusy] = useState(false);
   const [promptValue, setPromptValue] = useState("");
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceTreeEntry[]>([]);
@@ -148,6 +152,12 @@ export function App() {
   const [fileEditorContent, setFileEditorContent] = useState("");
   const [fileEditorDirty, setFileEditorDirty] = useState(false);
   const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     savedApiKeyRef.current = savedApiKey;
@@ -193,13 +203,15 @@ export function App() {
     reviewLogRef.current?.scrollTo({ top: reviewLogRef.current.scrollHeight });
   }, [reviewEntries]);
 
+  const readCwd = useCallback(() => shellRef.current?.getCwd() ?? readStorageText(STORAGE_KEYS.shellCwd, "/"), []);
+
   const setStatus = useCallback(
     (label: string, tone: StatusTone = "idle") => {
       setStatusLabel(label);
       setStatusTone(tone);
-      setCwd(shell.getCwd());
+      setCwd(readCwd());
     },
-    [shell],
+    [readCwd],
   );
 
   const setMobileView = useCallback((view: MobileView) => {
@@ -301,7 +313,7 @@ export function App() {
   const refreshWorkspaceTree = useCallback(async () => {
     const entries = await workspace.listTreeEntries();
     setWorkspaceEntries(entries);
-    setCwd(shell.getCwd());
+    setCwd(readCwd());
 
     const filePaths = entries.filter((entry) => entry.kind === "file").map((entry) => entry.path);
     const currentActiveFilePath = activeFilePathRef.current;
@@ -323,7 +335,7 @@ export function App() {
     if (!currentActiveFilePath || !fileEditorDirtyRef.current) {
       await loadWorkspaceFile(nextPath);
     }
-  }, [loadWorkspaceFile, shell, workspace]);
+  }, [loadWorkspaceFile, readCwd, workspace]);
 
   const openWorkspaceFile = useCallback(
     async (path: string) => {
@@ -354,7 +366,145 @@ export function App() {
     await refreshWorkspaceTree();
   }, [appendTerminal, fileEditorContent, refreshWorkspaceTree, workspace]);
 
-  const saveSettings = useCallback(() => {
+  const getShell = useCallback(async () => {
+    if (shellRef.current) {
+      return shellRef.current;
+    }
+    if (shellLoadPromiseRef.current) {
+      return shellLoadPromiseRef.current;
+    }
+
+    shellLoadPromiseRef.current = (async () => {
+      const { ShellRuntime } = await import("./shell");
+      const shell = new ShellRuntime(workspace, STORAGE_KEYS.shellCwd);
+      if (isMountedRef.current) {
+        shellRef.current = shell;
+        setCwd(shell.getCwd());
+      }
+      return shell;
+    })();
+
+    try {
+      return await shellLoadPromiseRef.current;
+    } finally {
+      shellLoadPromiseRef.current = undefined;
+    }
+  }, [workspace]);
+
+  const loadModelOptions = useCallback(async () => {
+    if (modelOptionsLoadRef.current) {
+      return modelOptionsLoadRef.current;
+    }
+
+    modelOptionsLoadRef.current = (async () => {
+      try {
+        const { listOpenRouterModels } = await import("./agent-session");
+        const nextOptions = Array.from(new Set([getDefaultModelId(), ...(await listOpenRouterModels())]));
+        if (isMountedRef.current) {
+          setModelOptions(nextOptions);
+        }
+        return nextOptions;
+      } catch {
+        const fallback = [getDefaultModelId()];
+        if (isMountedRef.current) {
+          setModelOptions(fallback);
+        }
+        return fallback;
+      } finally {
+        modelOptionsLoadRef.current = undefined;
+      }
+    })();
+
+    return modelOptionsLoadRef.current;
+  }, []);
+
+  const getOrCreateAgent = useCallback(async () => {
+    if (agentRef.current) {
+      return agentRef.current;
+    }
+    if (agentLoadPromiseRef.current) {
+      return agentLoadPromiseRef.current;
+    }
+
+    agentLoadPromiseRef.current = (async () => {
+      const shell = await getShell();
+      const { createBrowserAgentSession, updateAgentConfiguration } = await import("./agent-session");
+      const agent = await createBrowserAgentSession({
+        workspace,
+        shell,
+        readApiKey: () => savedApiKeyRef.current,
+        readModelId: () => savedModelIdRef.current,
+      });
+
+      await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
+      agent.subscribe(async (event) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        if (event.type === "message_end" || event.type === "agent_end") {
+          localStorage.setItem("just-pi.messages", JSON.stringify(agent.state.messages));
+        }
+
+        const toolText = formatToolEvent(event);
+        if (toolText) {
+          appendActivity(toolText);
+        }
+
+        if (shouldOpenAssistantBlock(event)) {
+          assistantBlockOpenRef.current = true;
+          activeAssistantReviewIdRef.current = addReviewMessage("assistant", "");
+          appendActivity("\nassistant> ");
+        }
+
+        const delta = formatAssistantDelta(event);
+        if (delta) {
+          appendActivity(delta);
+          if (activeAssistantReviewIdRef.current) {
+            updateReviewEntry(activeAssistantReviewIdRef.current, (entry) =>
+              entry.kind === "assistant" ? { ...entry, text: entry.text + delta } : entry,
+            );
+          }
+        }
+
+        if (shouldCloseAssistantBlock(event) && assistantBlockOpenRef.current) {
+          assistantBlockOpenRef.current = false;
+          activeAssistantReviewIdRef.current = undefined;
+          appendActivity("\n");
+        }
+
+        if (event.type === "agent_start") {
+          setStatus("Running", "busy");
+          setIsBusy(true);
+          if (isMobileViewport()) {
+            setMobileView("console");
+          }
+        }
+
+        if (event.type === "agent_end") {
+          setStatus("Idle", "idle");
+          setIsBusy(false);
+          await refreshWorkspaceTree();
+        }
+      });
+
+      if (!isMountedRef.current) {
+        agent.abort();
+        throw new Error("Agent initialization was interrupted.");
+      }
+
+      agentRef.current = agent;
+      return agent;
+    })();
+
+    try {
+      return await agentLoadPromiseRef.current;
+    } finally {
+      agentLoadPromiseRef.current = undefined;
+    }
+  }, [addReviewMessage, appendActivity, getShell, refreshWorkspaceTree, setMobileView, setStatus, updateReviewEntry, workspace]);
+
+  const saveSettings = useCallback(async () => {
     const nextApiKey = apiKeyInput.trim();
     const nextModelId = modelIdInput.trim() || getDefaultModelId();
     localStorage.setItem(STORAGE_KEYS.apiKey, nextApiKey);
@@ -363,7 +513,9 @@ export function App() {
     setSavedModelId(nextModelId);
 
     if (agentRef.current) {
-      updateAgentConfiguration(agentRef.current, nextModelId, shell);
+      const shell = await getShell();
+      const { updateAgentConfiguration } = await import("./agent-session");
+      await updateAgentConfiguration(agentRef.current, nextModelId, shell);
     }
 
     appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
@@ -373,10 +525,11 @@ export function App() {
         focusPromptInput();
       }
     }
-  }, [apiKeyInput, appendTerminal, focusPromptInput, modelIdInput, setMobileView, shell]);
+  }, [apiKeyInput, appendTerminal, focusPromptInput, getShell, modelIdInput, setMobileView]);
 
   const runManualShell = useCallback(
     async (command: string) => {
+      const shell = await getShell();
       setStatus("Shell", "busy");
       setIsBusy(true);
       appendTerminal(`\n$ ${command}\n`);
@@ -421,12 +574,12 @@ export function App() {
       await refreshWorkspaceTree();
       setStatus("Idle", "idle");
     },
-    [addReviewShell, appendTerminal, refreshWorkspaceTree, setStatus, shell, updateReviewEntry],
+    [addReviewShell, appendTerminal, getShell, refreshWorkspaceTree, setStatus, updateReviewEntry],
   );
 
   const submitPrompt = useCallback(
     async (prompt: string) => {
-      if (!prompt || !agentRef.current) {
+      if (!prompt) {
         return;
       }
       if (!savedApiKeyRef.current.trim()) {
@@ -439,7 +592,10 @@ export function App() {
         return;
       }
 
-      updateAgentConfiguration(agentRef.current, savedModelIdRef.current, shell);
+      const agent = await getOrCreateAgent();
+      const shell = await getShell();
+      const { updateAgentConfiguration } = await import("./agent-session");
+      await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
       if (isMobileViewport()) {
         setMobileView("console");
       }
@@ -448,7 +604,7 @@ export function App() {
       setPromptValue("");
 
       try {
-        await agentRef.current.prompt(prompt);
+        await agent.prompt(prompt);
       } catch (error) {
         if (assistantBlockOpenRef.current) {
           assistantBlockOpenRef.current = false;
@@ -462,7 +618,7 @@ export function App() {
         setIsBusy(false);
       }
     },
-    [addReviewMessage, addReviewNotice, appendActivity, setMobileView, setStatus, shell],
+    [addReviewMessage, addReviewNotice, appendActivity, getOrCreateAgent, getShell, setMobileView, setStatus],
   );
 
   const submitCommandBar = useCallback(async () => {
@@ -527,63 +683,6 @@ export function App() {
       );
       setActivityText((current) => current || "Agent activity will appear here.\n");
 
-      const agent = createBrowserAgentSession({
-        workspace,
-        shell,
-        readApiKey: () => savedApiKeyRef.current,
-        readModelId: () => savedModelIdRef.current,
-      });
-      agent.state.messages = restoreMessages();
-      updateAgentConfiguration(agent, savedModelIdRef.current, shell);
-      agentRef.current = agent;
-
-      agent.subscribe(async (event) => {
-        if (cancelled) {
-          return;
-        }
-
-        const toolText = formatToolEvent(event);
-        if (toolText) {
-          appendActivity(toolText);
-        }
-
-        if (shouldOpenAssistantBlock(event)) {
-          assistantBlockOpenRef.current = true;
-          activeAssistantReviewIdRef.current = addReviewMessage("assistant", "");
-          appendActivity("\nassistant> ");
-        }
-
-        const delta = formatAssistantDelta(event);
-        if (delta) {
-          appendActivity(delta);
-          if (activeAssistantReviewIdRef.current) {
-            updateReviewEntry(activeAssistantReviewIdRef.current, (entry) =>
-              entry.kind === "assistant" ? { ...entry, text: entry.text + delta } : entry,
-            );
-          }
-        }
-
-        if (shouldCloseAssistantBlock(event) && assistantBlockOpenRef.current) {
-          assistantBlockOpenRef.current = false;
-          activeAssistantReviewIdRef.current = undefined;
-          appendActivity("\n");
-        }
-
-        if (event.type === "agent_start") {
-          setStatus("Running", "busy");
-          setIsBusy(true);
-          if (isMobileViewport()) {
-            setMobileView("console");
-          }
-        }
-
-        if (event.type === "agent_end") {
-          setStatus("Idle", "idle");
-          setIsBusy(false);
-          await refreshWorkspaceTree();
-        }
-      });
-
       setStatus("Idle", "idle");
       setIsBusy(false);
       await refreshWorkspaceTree();
@@ -599,7 +698,7 @@ export function App() {
       agentRef.current?.abort();
       agentRef.current = undefined;
     };
-  }, [addReviewMessage, appendActivity, ensureStarterWorkspace, refreshWorkspaceTree, setMobileView, setStatus, shell, updateReviewEntry, workspace]);
+  }, [ensureStarterWorkspace, refreshWorkspaceTree, setStatus, workspace]);
 
   const hasSavedApiKey = savedApiKey.trim().length > 0;
   const onboardingTitle = hasSavedApiKey ? "Ready to build" : "Quick start";
@@ -661,9 +760,12 @@ export function App() {
               placeholder="openrouter/free"
               value={modelIdInput}
               onChange={(event) => setModelIdInput(event.target.value)}
+              onFocus={() => {
+                void loadModelOptions();
+              }}
             />
             <datalist id="model-options">
-              {OPENROUTER_MODELS.map((modelId) => (
+              {modelOptions.map((modelId) => (
                 <option key={modelId} value={modelId} />
               ))}
             </datalist>
@@ -674,7 +776,7 @@ export function App() {
         </div>
 
         <div className="button-row">
-          <button id="save-settings" type="button" onClick={saveSettings}>
+          <button id="save-settings" type="button" onClick={() => void saveSettings()}>
             Save settings
           </button>
           <button id="clear-transcript" type="button" onClick={clearTranscript}>
