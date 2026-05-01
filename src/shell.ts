@@ -1,4 +1,4 @@
-import { Bash, type BashExecResult } from "just-bash/browser";
+import type { Bash, BashExecResult } from "just-bash/browser";
 
 import type { OpfsWorkspace } from "./opfs";
 
@@ -14,26 +14,27 @@ export interface ShellRunOptions {
 }
 
 export class ShellRuntime {
-  private readonly bash: Bash;
+  private readonly workspace: OpfsWorkspace;
   private readonly cwdStorageKey: string;
+  private bash?: Bash;
+  private bashPromise?: Promise<Bash>;
+  private cwd: string;
   private queue: Promise<void> = Promise.resolve();
 
   public constructor(workspace: OpfsWorkspace, cwdStorageKey: string) {
     const savedCwd = localStorage.getItem(cwdStorageKey) || "/";
+    this.workspace = workspace;
     this.cwdStorageKey = cwdStorageKey;
-    this.bash = new Bash({
-      cwd: savedCwd,
-      env: DEFAULT_ENV,
-      fs: workspace,
-    });
+    this.cwd = savedCwd;
   }
 
   public getCwd(): string {
-    return this.bash.getCwd();
+    return this.bash?.getCwd() ?? this.cwd;
   }
 
   public async execute(command: string, options: ShellRunOptions = {}): Promise<BashExecResult> {
     const run = async (): Promise<BashExecResult> => {
+      const bash = await this.getBash();
       const abortController = new AbortController();
       const externalAbort = () => abortController.abort();
       const timeoutId =
@@ -44,11 +45,12 @@ export class ShellRuntime {
       options.signal?.addEventListener("abort", externalAbort, { once: true });
 
       try {
-        const result = await this.bash.exec(command, {
-          cwd: this.bash.getCwd(),
+        const result = await bash.exec(command, {
+          cwd: bash.getCwd(),
           signal: abortController.signal,
         });
-        localStorage.setItem(this.cwdStorageKey, this.bash.getCwd());
+        this.cwd = bash.getCwd();
+        localStorage.setItem(this.cwdStorageKey, this.cwd);
         return result;
       } finally {
         if (timeoutId !== undefined) {
@@ -64,5 +66,24 @@ export class ShellRuntime {
       () => undefined,
     );
     return next;
+  }
+
+  private async getBash(): Promise<Bash> {
+    if (this.bash) {
+      return this.bash;
+    }
+    if (!this.bashPromise) {
+      this.bashPromise = (async () => {
+        const { Bash } = await import("just-bash/browser");
+        const bash = new Bash({
+          cwd: this.cwd,
+          env: DEFAULT_ENV,
+          fs: this.workspace,
+        });
+        this.bash = bash;
+        return bash;
+      })();
+    }
+    return this.bashPromise;
   }
 }
