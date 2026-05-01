@@ -1,38 +1,54 @@
 # DESIGN
 
-## Shape
+## Product shape
 
-- Single-page, browser-only IDE shell: setup, drive, review, files.
-- No backend boundary in the app layer; runtime, storage, shell, and agent all live client-side.
-- Persistence is split by concern: OPFS for workspace files, `localStorage` for session/config/UI state.
+- `just-pi` is a browser-native coding cockpit: configure once, drive from one prompt lane, inspect results, edit files in place.
+- The app is fully client-side. Agent, shell, storage, and UI all live in the browser.
+- Persistence is intentionally split: OPFS holds workspace files; `localStorage` holds config, transcript, and UI memory.
 
-## Code map
+## Surface model
 
-- `src/main.tsx`: bootstraps React and the global stylesheet.
-- `src/App.tsx`: owns the shell, long-lived state, persistence wiring, and cross-panel orchestration.
-- `src/AssistantCommandBar.tsx`: prompt entry, `!` shell switch, suggestions, attachments, stop/send controls.
-- `src/AssistantReviewPane.tsx`: assistant thread renderer, tool-call cards, stored review hydration.
-- `src/assistant-attachments.ts`: text-file attachment adapter for assistant-ui.
-- `src/agent-session.ts`: Pi agent creation, model selection, browser tool surface.
-- `src/agent-session-ui.ts`: stream formatting, message restore helpers, starter workspace seed.
-- `src/shell.ts`: serialized `just-bash` runtime over the same OPFS-backed workspace.
-- `src/opfs.ts`: filesystem abstraction, path normalization, tree/index/search helpers.
+- The shell has four named surfaces: **Setup**, **Drive**, **Review**, **Files**.
+- Desktop shows them as one continuous workspace: header/status, setup strip, split main area, command lane.
+- Mobile keeps the same surfaces but shows one at a time behind a 4-tab switcher.
+- The command lane is the center of gravity: plain text goes to the agent, `!` goes to shell.
+- Setup compresses into a quieter strip after configuration so Drive and Review read as primary.
 
-## Layout
+## Interaction model
 
-- Desktop is a four-band stack: header, setup controls, main work area, command bar.
-- The main work area is two columns:
-  - left: review stream over terminal/activity
-  - right: file tree beside editor
-- Mobile collapses into one active view at a time behind a 4-tab switcher: Setup, Drive, Review, Files.
-- The command model is intentionally unified: plain text targets the agent; `!` routes to shell.
+- **Setup** exists to unlock and tune the system, then get out of the way.
+- **Drive** is the primary action surface.
+- **Review** is the canonical timeline of what happened: prompts, tool calls, shell output, notices, stream state.
+- **Files** is a working editor, not a passive preview.
+- Onboarding makes the first useful move obvious without hiding power features.
 
-## Style
+## Runtime map
 
-- Dense dark UI with a soft gradient page background and glass-like panels.
-- App chrome uses sans-serif; file/content surfaces use monospace.
-- Repeated primitives carry the design: rounded panels, pill chips, chat bubbles, compact action rows.
-- Color meaning is semantic, not decorative: blue for active/agent, green for shell/ready, red for failure.
-- Review output is one visual family with small variants for user, assistant, shell, notice, and tool states.
-- Workspace UI stays minimal: hierarchy and selection do the work instead of heavy explorer chrome.
-- Copy is short, operational, and onboarding-oriented; the interface tries to keep first action obvious.
+- `src/App.tsx`: shell orchestrator; owns state, persistence wiring, and cross-surface flow.
+- `src/AssistantCommandBar.tsx`: prompt entry, mode switch, suggestions, attachments, stop/send controls.
+- `src/AssistantReviewPane.tsx`: assistant-thread rendering and tool-card display.
+- `src/assistant-attachments.ts`: text attachment adapter.
+- `src/agent-session.ts` + `src/agent-session-ui.ts`: agent creation, model/runtime config, stream formatting, starter state.
+- `src/shell.ts`: serialized `just-bash` runtime over the same workspace.
+- `src/opfs.ts`: OPFS-backed filesystem, tree/search helpers, path normalization.
+- `src/main.tsx`: bootstraps the shell and global CSS.
+
+## Visual grammar
+
+- Tone: dark, dense, calm, tool-like.
+- Field: soft gradient backdrop; panels float as subdued glass cards.
+- Typography split is functional: sans for chrome, mono for working surfaces.
+- Primitive set is intentionally small: panel, chip, bubble, button row, tree row.
+- Color is semantic, not decorative: blue = active/agent, green = shell/ready, red = error.
+- Hierarchy comes from grouping, spacing, and state accents more than heavy borders or ornament.
+- The header keeps status and cwd visible but lightweight.
+
+## Quality bar
+
+- Prefer fewer, stronger primitives over one-off variants.
+- Keep labels short and operational.
+- Let the review lane explain system behavior; avoid duplicating that explanation elsewhere.
+- Keep the workspace visually quiet so file hierarchy and edit state stand out.
+- Preserve identical surface names and roles across desktop and mobile.
+- Reduce repeated explanatory copy; keep the shell compact and serious.
+- Review acts as the source of truth; Files holds the working set.

@@ -152,10 +152,6 @@ function readSupplementalReviewEntries(): ReviewEntry[] {
   );
 }
 
-function isGitHubPagesHost(): boolean {
-  return window.location.hostname.endsWith(".github.io");
-}
-
 function isMobileViewport(): boolean {
   return window.matchMedia("(max-width: 980px)").matches;
 }
@@ -252,6 +248,7 @@ export function App() {
   const [fileEditorContent, setFileEditorContent] = useState("");
   const [fileEditorDirty, setFileEditorDirty] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [isSetupExpanded, setIsSetupExpanded] = useState(() => savedApiKeyInitial.trim().length === 0);
 
   const suggestionAdapter = useMemo(
     () => ({
@@ -727,6 +724,7 @@ export function App() {
     localStorage.setItem(STORAGE_KEYS.modelId, nextModelId);
     setSavedApiKey(nextApiKey);
     setSavedModelId(nextModelId);
+    setIsSetupExpanded(nextApiKey.length === 0);
 
     if (agentRef.current) {
       const shell = await getShell();
@@ -878,9 +876,9 @@ export function App() {
       }
 
       setTerminalText((current) =>
-        current || "just-pi ready. Configure an OpenRouter key, inspect the workspace, then prompt the agent.\n",
+        current || "just-pi ready.\n",
       );
-      setActivityText((current) => current || "Agent activity will appear here.\n");
+      setActivityText((current) => current || "Tool stream ready.\n");
 
       setStatus("Idle", "idle");
       setIsBusy(false);
@@ -900,12 +898,9 @@ export function App() {
   }, [ensureStarterWorkspace, refreshWorkspaceTree, setStatus, workspace]);
 
   const hasSavedApiKey = savedApiKey.trim().length > 0;
-  const onboardingTitle = hasSavedApiKey ? "Ready to build" : "Quick start";
-  const onboardingText = hasSavedApiKey
-    ? "Agent mode is enabled. Use plain text for the agent, start with ! for shell commands, and remember that files persist in this browser."
-      : isGitHubPagesHost()
-        ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one."
-        : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one.";
+  const setupCopy = hasSavedApiKey
+    ? "Key and model stay in this browser."
+    : "Save a key to unlock agent prompts. Shell commands already work.";
   const appDataState = hasSavedApiKey ? "ready" : "setup";
 
   return (
@@ -924,7 +919,7 @@ export function App() {
         <header className="hero">
           <div className="brand-lockup">
             <h1>just-pi</h1>
-            <p className="hero-copy">Zero-infra AI IDE for Pi agenting, OPFS files, and just-bash.</p>
+            <p className="hero-copy">Browser-native coding cockpit.</p>
           </div>
           <div className="hero-side">
             <div className="status-card">
@@ -941,92 +936,114 @@ export function App() {
           </div>
         </header>
 
-        <section className="panel controls">
-          <div className="control-grid">
-            <label className="field">
-              <span>OpenRouter API key</span>
-              <input
-                id="api-key"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="sk-or-v1-..."
-                value={apiKeyInput}
-                onChange={(event) => setApiKeyInput(event.target.value)}
-              />
-              <span className="field-note">Stored only in this browser via localStorage.</span>
-            </label>
-
-            <label className="field">
-              <span>Model</span>
-              <input
-                id="model-id"
-                type="text"
-                list="model-options"
-                spellCheck={false}
-                placeholder="openrouter/free"
-                value={modelIdInput}
-                onChange={(event) => setModelIdInput(event.target.value)}
-                onFocus={() => {
-                  void loadModelOptions();
-                }}
-              />
-              <datalist id="model-options">
-                {modelOptions.map((modelId) => (
-                  <option key={modelId} value={modelId} />
-                ))}
-              </datalist>
-              <span className="field-note">
-                Defaults to <code>openrouter/free</code>.
-              </span>
-            </label>
-          </div>
-
-          <div className="button-row">
-            <button id="save-settings" type="button" onClick={() => void saveSettings()}>
-              Save settings
-            </button>
-            <button id="clear-transcript" type="button" onClick={clearTranscript}>
-              Clear transcript
-            </button>
-            <button id="reset-workspace" type="button" onClick={() => void resetWorkspace()}>
-              Reset workspace
-            </button>
-            <button id="refresh-workspace" type="button" onClick={() => void refreshWorkspaceTree()}>
-              Refresh workspace
-            </button>
-          </div>
-
-          <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
+        <section className="panel controls" data-state={appDataState} data-expanded={isSetupExpanded ? "true" : "false"}>
+          <div className="panel-header surface-header controls-header">
             <div>
-              <h3 id="onboarding-title">{onboardingTitle}</h3>
-              <p id="onboarding-text" className="panel-copy">
-                {onboardingText.split("<code>").length > 1 ? null : onboardingText}
-                {onboardingText.includes("<code>") ? (
-                  <>
-                    {onboardingText.split("<code>")[0]}
-                    <code>{onboardingText.split("<code>")[1]?.split("</code>")[0] ?? ""}</code>
-                    {onboardingText.split("</code>")[1] ?? ""}
-                  </>
-                ) : null}
-              </p>
+              <h2>Setup</h2>
+              <p className="panel-copy">{setupCopy}</p>
             </div>
-            <div className="button-row onboarding-actions">
-              {QUICK_ACTIONS.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => {
-                    setMobileView("command");
-                    commandBarRef.current?.setText(action.value);
-                  }}
-                >
-                  {action.label}
+            {hasSavedApiKey ? (
+              <button
+                id="toggle-setup"
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setIsSetupExpanded((current) => !current);
+                }}
+              >
+                {isSetupExpanded ? "Hide setup" : "Edit setup"}
+              </button>
+            ) : null}
+          </div>
+
+          {hasSavedApiKey && !isSetupExpanded ? (
+            <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
+          ) : (
+            <>
+              <div className="control-grid">
+                <label className="field">
+                  <span>OpenRouter API key</span>
+                  <input
+                    id="api-key"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="sk-or-v1-..."
+                    value={apiKeyInput}
+                    onChange={(event) => setApiKeyInput(event.target.value)}
+                  />
+                  <span className="field-note">Stored only in this browser via localStorage.</span>
+                </label>
+
+                <label className="field">
+                  <span>Model</span>
+                  <input
+                    id="model-id"
+                    type="text"
+                    list="model-options"
+                    spellCheck={false}
+                    placeholder="openrouter/free"
+                    value={modelIdInput}
+                    onChange={(event) => setModelIdInput(event.target.value)}
+                    onFocus={() => {
+                      void loadModelOptions();
+                    }}
+                  />
+                  <datalist id="model-options">
+                    {modelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId} />
+                    ))}
+                  </datalist>
+                  <span className="field-note">
+                    Defaults to <code>openrouter/free</code>.
+                  </span>
+                </label>
+              </div>
+
+              <div className="button-row">
+                <button id="save-settings" type="button" onClick={() => void saveSettings()}>
+                  Save settings
                 </button>
-              ))}
-            </div>
-          </section>
+                <button id="clear-transcript" type="button" className="secondary-button" onClick={clearTranscript}>
+                  Clear transcript
+                </button>
+                <button id="reset-workspace" type="button" className="secondary-button" onClick={() => void resetWorkspace()}>
+                  Reset workspace
+                </button>
+                <button id="refresh-workspace" type="button" className="secondary-button" onClick={() => void refreshWorkspaceTree()}>
+                  Refresh files
+                </button>
+              </div>
+
+              {hasSavedApiKey ? (
+                <p className="setup-summary">Drive from the prompt lane. Review records prompts, tools, and shell output.</p>
+              ) : (
+                <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
+                  <div>
+                    <h3 id="onboarding-title">Quick start</h3>
+                    <p id="onboarding-text" className="panel-copy">
+                      Save a key for agent prompts, or start now with <code>!</code> in Drive.
+                    </p>
+                  </div>
+                  <div className="button-row onboarding-actions">
+                    {QUICK_ACTIONS.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          setMobileView("command");
+                          commandBarRef.current?.setText(action.value);
+                        }}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
         </section>
 
         <nav className="mobile-nav" aria-label="Quick view switcher">
@@ -1056,8 +1073,11 @@ export function App() {
 
         <main className="main-grid">
           <section className="panel console-panel">
-            <div className="panel-header">
-              <h2>Console</h2>
+            <div className="panel-header surface-header">
+              <div>
+                <h2>Review</h2>
+                <p className="panel-copy">Timeline first; traces stay below.</p>
+              </div>
             </div>
 
             <div className="console-stack">
@@ -1068,16 +1088,12 @@ export function App() {
                 supplementalCount={reviewEntries.length}
                 emptyState={
                   <div className="review-empty-state">
-                    <p className="review-empty-title">{hasSavedApiKey ? "Review is ready." : "Save a key to unlock assistant review."}</p>
+                    <p className="review-empty-title">{hasSavedApiKey ? "Drive to begin." : "Review is waiting on Drive."}</p>
                     <p className="review-empty-copy">
                       {hasSavedApiKey ? (
-                        <>
-                          Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
-                        </>
+                        <>Review records prompts, tools, and shell output.</>
                       ) : (
-                        <>
-                          Plain-text prompts need an OpenRouter API key first. Commands that start with <code>!</code> already stay inline here as command cards.
-                        </>
+                        <>Shell commands already land here. Save a key to add agent prompts.</>
                       )}
                     </p>
                   </div>
@@ -1090,7 +1106,7 @@ export function App() {
               <div className="console-grid">
                 <section className="console-section console-section-terminal">
                   <div className="console-section-header">
-                    <h3>Terminal</h3>
+                    <h3>Shell output</h3>
                   </div>
                   <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
                     {terminalText}
@@ -1099,7 +1115,7 @@ export function App() {
 
                 <section className="console-section console-section-activity">
                   <div className="console-section-header">
-                    <h3>Agent activity</h3>
+                    <h3>Tool stream</h3>
                   </div>
                   <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
                     {activityText}
@@ -1110,8 +1126,11 @@ export function App() {
           </section>
 
           <aside className="panel workspace-panel">
-            <div className="panel-header">
-              <h2>Workspace</h2>
+            <div className="panel-header surface-header">
+              <div>
+                <h2>Files</h2>
+                <p className="panel-copy">Working set in OPFS.</p>
+              </div>
             </div>
             <div className="workspace-browser">
               <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
@@ -1141,9 +1160,9 @@ export function App() {
               <section className="file-viewer">
                 <div className="file-viewer-header">
                   <div>
-                    <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "No file selected"}</h3>
+                    <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "Working set"}</h3>
                     <p id="file-subtitle" className="file-subtitle">
-                      {activeFilePath ? activeFilePath : "Choose a file from the workspace to view or edit it."}
+                      {activeFilePath ? activeFilePath : "Open a file to inspect or edit the working set."}
                     </p>
                   </div>
 
@@ -1151,6 +1170,7 @@ export function App() {
                     <button
                       id="file-reload"
                       type="button"
+                      className="secondary-button"
                       disabled={!activeFilePath}
                       onClick={async () => {
                         if (!activeFilePathRef.current) {
@@ -1177,7 +1197,7 @@ export function App() {
                   id="file-editor"
                   className="file-editor"
                   spellCheck={false}
-                  placeholder="Open a file from the workspace to inspect or edit it."
+                  placeholder="Open a file from the working set to inspect or edit it."
                   disabled={!activeFilePath}
                   value={fileEditorContent}
                   onChange={(event) => {

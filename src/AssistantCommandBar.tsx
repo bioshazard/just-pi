@@ -52,7 +52,7 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
       : fallbackSuggestions;
 
   const commandMode = promptValue.trim().startsWith("!") ? "shell" : "agent";
-  const promptSubmitLabel = commandMode === "shell" ? "Run command" : "Send prompt";
+  const promptSubmitLabel = commandMode === "shell" ? "Run shell" : "Send prompt";
   const inputDisabled = !isReady || isBusy;
   const hasAttachmentConflict = commandMode === "shell" && attachments.length > 0;
 
@@ -138,13 +138,11 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
     >
       <div className="panel-header input-panel-header">
         <div>
-          <h2>Command bar</h2>
-          <p className="panel-copy">
-            Start with <code>!</code> to run just-bash. Plain text goes through assistant-ui&apos;s composer.
-          </p>
+          <h2>Drive</h2>
+          <p className="panel-copy">Plain text drives the agent. Start with <code>!</code> for shell.</p>
         </div>
         <span id="command-mode" className="mode-chip" data-mode={commandMode}>
-          {commandMode === "shell" ? "Shell mode" : "Agent mode"}
+          {commandMode === "shell" ? "Shell" : "Agent"}
         </span>
       </div>
 
@@ -155,7 +153,7 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
         minRows={4}
         maxRows={10}
         submitMode="none"
-        placeholder="Ask the agent something, or run !ls -la against the OPFS workspace."
+        placeholder="Drive the agent, or run !ls against the OPFS working set."
         disabled={inputDisabled}
         onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
           if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.shiftKey) {
@@ -229,7 +227,7 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
 
       <div className="input-footer">
         <div className="input-hints">
-          <p className="input-hint">Press Ctrl+Enter or Cmd+Enter to submit.</p>
+          <p className="input-hint">Ctrl+Enter or Cmd+Enter submits.</p>
           {!agentEnabled && commandMode === "agent" ? (
             <p className="input-hint input-hint-warning">Save an OpenRouter key to send assistant prompts.</p>
           ) : null}
