@@ -874,10 +874,19 @@ h2 {
   gap: 0.75rem;
 }
 
+.input-hints {
+  display: grid;
+  gap: 0.2rem;
+}
+
 .input-hint {
   margin: 0;
   color: #93a6d2;
   font-size: 0.8rem;
+}
+
+.input-hint-warning {
+  color: #f0c47f;
 }
 
 .main-grid > *,

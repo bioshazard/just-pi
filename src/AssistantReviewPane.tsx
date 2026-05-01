@@ -1,30 +1,14 @@
 import {
-  AssistantRuntimeProvider,
   MessagePartPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  useAui,
   useAuiState,
-  useLocalRuntime,
   type MessageState,
-  type ChatModelAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  type ReactNode,
-  type Ref,
-} from "react";
-
-export interface AssistantReviewPaneHandle {
-  sendPrompt(prompt: string): void;
-}
+import { useEffect, type ReactNode, type Ref } from "react";
 
 interface AssistantReviewPaneProps {
-  adapter: ChatModelAdapter;
   storageKey: string;
   reviewLogId: string;
   agentEnabled: boolean;
@@ -34,7 +18,7 @@ interface AssistantReviewPaneProps {
   viewportRef?: Ref<HTMLDivElement>;
 }
 
-function readStoredMessages(storageKey: string): readonly ThreadMessageLike[] {
+export function readStoredAssistantMessages(storageKey: string): readonly ThreadMessageLike[] {
   const raw = localStorage.getItem(storageKey);
   if (!raw) {
     return [];
@@ -164,7 +148,7 @@ function AssistantReviewMessage() {
   );
 }
 
-function AssistantReviewPaneInner({
+export function AssistantReviewPane({
   storageKey,
   reviewLogId,
   agentEnabled,
@@ -172,23 +156,8 @@ function AssistantReviewPaneInner({
   supplementalEntries,
   emptyState,
   viewportRef,
-  forwardedRef,
-}: Omit<AssistantReviewPaneProps, "adapter"> & { forwardedRef: Ref<AssistantReviewPaneHandle> }) {
-  const aui = useAui();
+}: AssistantReviewPaneProps) {
   const messages = useAuiState((state) => state.thread.messages);
-
-  useImperativeHandle(
-    forwardedRef,
-    () => ({
-      sendPrompt(prompt: string) {
-        aui.thread().append({
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-        });
-      },
-    }),
-    [aui],
-  );
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(messages));
@@ -211,26 +180,3 @@ function AssistantReviewPaneInner({
     </ThreadPrimitive.Root>
   );
 }
-
-export const AssistantReviewPane = forwardRef<AssistantReviewPaneHandle, AssistantReviewPaneProps>(function AssistantReviewPane(
-  { adapter, storageKey, reviewLogId, agentEnabled, supplementalCount, supplementalEntries, emptyState, viewportRef },
-  ref,
-) {
-  const initialMessages = useMemo(() => readStoredMessages(storageKey), [storageKey]);
-  const runtime = useLocalRuntime(adapter, { initialMessages });
-
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <AssistantReviewPaneInner
-        forwardedRef={ref}
-        storageKey={storageKey}
-        reviewLogId={reviewLogId}
-        agentEnabled={agentEnabled}
-        supplementalCount={supplementalCount}
-        supplementalEntries={supplementalEntries}
-        emptyState={emptyState}
-        viewportRef={viewportRef}
-      />
-    </AssistantRuntimeProvider>
-  );
-});

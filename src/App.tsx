@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Agent } from "@mariozechner/pi-agent-core";
-import type { ChatModelAdapter, ChatModelRunResult, ThreadMessage } from "@assistant-ui/react";
+import {
+  AssistantRuntimeProvider,
+  useLocalRuntime,
+  type ChatModelAdapter,
+  type ChatModelRunResult,
+  type ThreadMessage,
+} from "@assistant-ui/react";
 import type { ShellRuntime } from "./shell";
 
-import { AssistantReviewPane, type AssistantReviewPaneHandle } from "./AssistantReviewPane";
+import { AssistantCommandBar, type AssistantCommandBarHandle } from "./AssistantCommandBar";
+import { AssistantReviewPane, readStoredAssistantMessages } from "./AssistantReviewPane";
 import {
   formatAssistantDelta,
   formatToolEvent,
@@ -34,6 +41,12 @@ type ReviewEntry =
 
 interface ReviewEntryViewProps {
   entry: ReviewEntry;
+}
+
+interface AssistantRuntimeScopeProps {
+  adapter: ChatModelAdapter;
+  storageKey: string;
+  children: ReactNode;
 }
 
 function getLatestUserPrompt(messages: readonly ThreadMessage[]): string {
@@ -127,6 +140,13 @@ function ReviewEntryView({ entry }: ReviewEntryViewProps) {
   );
 }
 
+function AssistantRuntimeScope({ adapter, storageKey, children }: AssistantRuntimeScopeProps) {
+  const initialMessages = useMemo(() => readStoredAssistantMessages(storageKey), [storageKey]);
+  const runtime = useLocalRuntime(adapter, { initialMessages });
+
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
+}
+
 export function App() {
   const savedApiKeyInitial = readStorageText(STORAGE_KEYS.apiKey);
   const savedModelInitial = readStorageText(STORAGE_KEYS.modelId, getDefaultModelId());
@@ -144,9 +164,7 @@ export function App() {
   const shellLoadPromiseRef = useRef<Promise<ShellRuntime> | undefined>(undefined);
   const shellRef = useRef<ShellRuntime | undefined>(undefined);
   const isMountedRef = useRef(true);
-  const assistantReviewRef = useRef<AssistantReviewPaneHandle>(null);
-
-  const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const commandBarRef = useRef<AssistantCommandBarHandle>(null);
   const terminalRef = useRef<HTMLPreElement>(null);
   const activityRef = useRef<HTMLPreElement>(null);
   const reviewLogRef = useRef<HTMLDivElement>(null);
@@ -166,7 +184,6 @@ export function App() {
   const [statusTone, setStatusTone] = useState<StatusTone>("idle");
   const [cwd, setCwd] = useState(savedCwdInitial);
   const [isBusy, setIsBusy] = useState(false);
-  const [promptValue, setPromptValue] = useState("");
   const [assistantThreadKey, setAssistantThreadKey] = useState(0);
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string>();
@@ -240,13 +257,7 @@ export function App() {
   }, []);
 
   const focusPromptInput = useCallback(() => {
-    const element = promptInputRef.current;
-    if (!element) {
-      return;
-    }
-    element.focus();
-    const end = element.value.length;
-    element.setSelectionRange(end, end);
+    commandBarRef.current?.focus();
   }, []);
 
   const appendTerminal = useCallback((text: string) => {
@@ -677,63 +688,45 @@ export function App() {
     [addReviewShell, appendTerminal, getShell, refreshWorkspaceTree, setStatus, updateReviewEntry],
   );
 
-  const submitPrompt = useCallback(
-    async (prompt: string) => {
-      if (!prompt) {
-        return;
-      }
-      if (!savedApiKeyRef.current.trim()) {
-        addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
-        appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
-        setStatus("Missing API key", "error");
-        if (isMobileViewport()) {
-          setMobileView("settings");
-        }
-        return;
-      }
+  const handleMissingAgentKey = useCallback(() => {
+    addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
+    appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
+    setStatus("Missing API key", "error");
+    if (isMobileViewport()) {
+      setMobileView("settings");
+    }
+  }, [addReviewNotice, appendActivity, setMobileView, setStatus]);
 
+  const handleMissingShellCommand = useCallback(() => {
+    appendTerminal("\n[error] Enter a shell command after !.\n");
+    setStatus("Missing command", "error");
+  }, [appendTerminal, setStatus]);
+
+  const handleBeforeAgentSubmit = useCallback(
+    (prompt: string) => {
       if (isMobileViewport()) {
         setMobileView("console");
       }
       appendActivity(`\nuser> ${prompt}\n`);
-      setPromptValue("");
-
-      try {
-        assistantReviewRef.current?.sendPrompt(prompt);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addReviewNotice(message, "error");
-        appendActivity(`[agent error] ${message}\n`);
-        setStatus("Agent error", "error");
-        setIsBusy(false);
-      }
     },
-    [addReviewNotice, appendActivity, setMobileView, setStatus],
+    [appendActivity, setMobileView],
   );
 
-  const submitCommandBar = useCallback(async () => {
-    const input = promptValue.trim();
-    if (!input) {
-      return;
-    }
-
-    if (input.startsWith("!")) {
-      const command = input.slice(1).trim();
-      if (!command) {
-        appendTerminal("\n[error] Enter a shell command after !.\n");
-        setStatus("Missing command", "error");
-        return;
-      }
-      setPromptValue("");
+  const handleShellSubmit = useCallback(
+    async (command: string) => {
       if (isMobileViewport()) {
         setMobileView("console");
       }
       await runManualShell(command);
-      return;
-    }
+    },
+    [runManualShell, setMobileView],
+  );
 
-    await submitPrompt(input);
-  }, [appendTerminal, promptValue, runManualShell, setMobileView, setStatus, submitPrompt]);
+  const handleAbortAgent = useCallback(() => {
+    agentRef.current?.abort();
+    addReviewNotice("Agent abort requested.");
+    appendActivity("\n[agent] abort requested.\n");
+  }, [addReviewNotice, appendActivity]);
 
   const resetWorkspace = useCallback(async () => {
     const confirmed = window.confirm("Reset the OPFS workspace? This removes all files created in just-pi.");
@@ -796,352 +789,300 @@ export function App() {
   const onboardingTitle = hasSavedApiKey ? "Ready to build" : "Quick start";
   const onboardingText = hasSavedApiKey
     ? "Agent mode is enabled. Use plain text for the agent, start with ! for shell commands, and remember that files persist in this browser."
-    : isGitHubPagesHost()
-      ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one."
-      : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one.";
-
-  const commandMode = promptValue.trim().startsWith("!") ? "shell" : "agent";
-  const promptSubmitLabel = commandMode === "shell" ? "Run command" : "Send prompt";
+      : isGitHubPagesHost()
+        ? "This GitHub Pages app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one."
+        : "This app runs entirely in your browser. Save an OpenRouter key to unlock agent mode; ! shell commands already work without one.";
   const appDataState = hasSavedApiKey ? "ready" : "setup";
 
   return (
-    <div className="app" id="app" data-mobile-view={mobileView}>
-      <header className="hero">
-        <div className="brand-lockup">
-          <h1>just-pi</h1>
-          <p className="hero-copy">Zero-infra AI IDE for Pi agenting, OPFS files, and just-bash.</p>
-        </div>
-        <div className="hero-side">
-          <div className="status-card">
-            <span className="status-chip" id="status-chip" data-tone={statusTone}>
-              {statusLabel}
-            </span>
-            <span className="cwd-chip" id="cwd-chip">
-              {cwd}
-            </span>
+    <AssistantRuntimeScope key={`${assistantThreadKey}`} adapter={assistantAdapter} storageKey={STORAGE_KEYS.assistantThread}>
+      <div className="app" id="app" data-mobile-view={mobileView}>
+        <header className="hero">
+          <div className="brand-lockup">
+            <h1>just-pi</h1>
+            <p className="hero-copy">Zero-infra AI IDE for Pi agenting, OPFS files, and just-bash.</p>
           </div>
-          <a className="repo-link" href="https://github.com/bioshazard/just-pi" target="_blank" rel="noreferrer">
-            GitHub
-          </a>
-        </div>
-      </header>
-
-      <section className="panel controls">
-        <div className="control-grid">
-          <label className="field">
-            <span>OpenRouter API key</span>
-            <input
-              id="api-key"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="sk-or-v1-..."
-              value={apiKeyInput}
-              onChange={(event) => setApiKeyInput(event.target.value)}
-            />
-            <span className="field-note">Stored only in this browser via localStorage.</span>
-          </label>
-
-          <label className="field">
-            <span>Model</span>
-            <input
-              id="model-id"
-              type="text"
-              list="model-options"
-              spellCheck={false}
-              placeholder="openrouter/free"
-              value={modelIdInput}
-              onChange={(event) => setModelIdInput(event.target.value)}
-              onFocus={() => {
-                void loadModelOptions();
-              }}
-            />
-            <datalist id="model-options">
-              {modelOptions.map((modelId) => (
-                <option key={modelId} value={modelId} />
-              ))}
-            </datalist>
-            <span className="field-note">
-              Defaults to <code>openrouter/free</code>.
-            </span>
-          </label>
-        </div>
-
-        <div className="button-row">
-          <button id="save-settings" type="button" onClick={() => void saveSettings()}>
-            Save settings
-          </button>
-          <button id="clear-transcript" type="button" onClick={clearTranscript}>
-            Clear transcript
-          </button>
-          <button id="reset-workspace" type="button" onClick={() => void resetWorkspace()}>
-            Reset workspace
-          </button>
-          <button id="refresh-workspace" type="button" onClick={() => void refreshWorkspaceTree()}>
-            Refresh workspace
-          </button>
-        </div>
-
-        <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
-          <div>
-            <h3 id="onboarding-title">{onboardingTitle}</h3>
-            <p id="onboarding-text" className="panel-copy">
-              {onboardingText.split("<code>").length > 1 ? null : onboardingText}
-              {onboardingText.includes("<code>") ? (
-                <>
-                  {onboardingText.split("<code>")[0]}
-                  <code>{onboardingText.split("<code>")[1]?.split("</code>")[0] ?? ""}</code>
-                  {onboardingText.split("</code>")[1] ?? ""}
-                </>
-              ) : null}
-            </p>
-          </div>
-          <div className="button-row onboarding-actions">
-            {QUICK_ACTIONS.map((action) => (
-              <button
-                key={action.label}
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setMobileView("command");
-                  setPromptValue(action.value);
-                  focusPromptInput();
-                }}
-              >
-                {action.label}
-              </button>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <nav className="mobile-nav" aria-label="Quick view switcher">
-        {([
-          ["settings", "Setup"],
-          ["command", "Drive"],
-          ["console", "Review"],
-          ["workspace", "Files"],
-        ] as const).map(([view, label]) => (
-          <button
-            key={view}
-            type="button"
-            className={`mobile-tab${mobileView === view ? " is-active" : ""}`}
-            data-mobile-target={view}
-            aria-pressed={mobileView === view}
-            onClick={() => {
-              setMobileView(view);
-              if (view === "command") {
-                focusPromptInput();
-              }
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="main-grid">
-        <section className="panel console-panel">
-          <div className="panel-header">
-            <h2>Console</h2>
-          </div>
-
-          <div className="console-stack">
-            <AssistantReviewPane
-              key={assistantThreadKey}
-              ref={assistantReviewRef}
-              adapter={assistantAdapter}
-              storageKey={STORAGE_KEYS.assistantThread}
-              reviewLogId="review-log"
-              viewportRef={reviewLogRef}
-              agentEnabled={hasSavedApiKey}
-              supplementalCount={reviewEntries.length}
-              emptyState={
-                <div className="review-empty-state">
-                  <p className="review-empty-title">{hasSavedApiKey ? "Review is ready." : "Save a key to unlock assistant review."}</p>
-                  <p className="review-empty-copy">
-                    {hasSavedApiKey ? (
-                      <>
-                        Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
-                      </>
-                    ) : (
-                      <>
-                        Plain-text prompts need an OpenRouter API key first. Commands that start with <code>!</code> already stay inline here as command cards.
-                      </>
-                    )}
-                  </p>
-                </div>
-              }
-              supplementalEntries={reviewEntries.map((entry) => (
-                <ReviewEntryView key={entry.id} entry={entry} />
-              ))}
-            />
-
-            <div className="console-grid">
-              <section className="console-section console-section-terminal">
-                <div className="console-section-header">
-                  <h3>Terminal</h3>
-                </div>
-                <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
-                  {terminalText}
-                </pre>
-              </section>
-
-              <section className="console-section console-section-activity">
-                <div className="console-section-header">
-                  <h3>Agent activity</h3>
-                </div>
-                <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
-                  {activityText}
-                </pre>
-              </section>
+          <div className="hero-side">
+            <div className="status-card">
+              <span className="status-chip" id="status-chip" data-tone={statusTone}>
+                {statusLabel}
+              </span>
+              <span className="cwd-chip" id="cwd-chip">
+                {cwd}
+              </span>
             </div>
+            <a className="repo-link" href="https://github.com/bioshazard/just-pi" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
           </div>
-        </section>
+        </header>
 
-        <aside className="panel workspace-panel">
-          <div className="panel-header">
-            <h2>Workspace</h2>
-          </div>
-          <div className="workspace-browser">
-            <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
-              {workspaceEntries.map((entry) =>
-                entry.kind === "directory" ? (
-                  <div
-                    key={entry.path}
-                    className="workspace-node workspace-node-directory"
-                    style={{ ["--depth" as string]: String(entry.depth) }}
-                  >
-                    {`▾ ${entry.name}`}
-                  </div>
-                ) : (
-                  <button
-                    key={entry.path}
-                    type="button"
-                    className={`workspace-node${entry.path === activeFilePath ? " is-active" : ""}`}
-                    style={{ ["--depth" as string]: String(entry.depth) }}
-                    onClick={() => void openWorkspaceFile(entry.path)}
-                  >
-                    {entry.name}
-                  </button>
-                ),
-              )}
-            </div>
-
-            <section className="file-viewer">
-              <div className="file-viewer-header">
-                <div>
-                  <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "No file selected"}</h3>
-                  <p id="file-subtitle" className="file-subtitle">
-                    {activeFilePath ? activeFilePath : "Choose a file from the workspace to view or edit it."}
-                  </p>
-                </div>
-
-                <div className="button-row file-actions">
-                  <button
-                    id="file-reload"
-                    type="button"
-                    disabled={!activeFilePath}
-                    onClick={async () => {
-                      if (!activeFilePathRef.current) {
-                        return;
-                      }
-                      if (fileEditorDirtyRef.current) {
-                        const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
-                        if (!shouldDiscard) {
-                          return;
-                        }
-                      }
-                      await loadWorkspaceFile(activeFilePathRef.current);
-                    }}
-                  >
-                    Reload file
-                  </button>
-                  <button id="file-save" type="button" disabled={!activeFilePath || !fileEditorDirty} onClick={() => void saveActiveFile()}>
-                    Save file
-                  </button>
-                </div>
-              </div>
-
-              <textarea
-                id="file-editor"
-                className="file-editor"
+        <section className="panel controls">
+          <div className="control-grid">
+            <label className="field">
+              <span>OpenRouter API key</span>
+              <input
+                id="api-key"
+                type="password"
+                autoComplete="off"
                 spellCheck={false}
-                placeholder="Open a file from the workspace to inspect or edit it."
-                disabled={!activeFilePath}
-                value={fileEditorContent}
-                onChange={(event) => {
-                  setFileEditorContent(event.target.value);
-                  if (activeFilePath) {
-                    setFileEditorDirty(true);
-                  }
+                placeholder="sk-or-v1-..."
+                value={apiKeyInput}
+                onChange={(event) => setApiKeyInput(event.target.value)}
+              />
+              <span className="field-note">Stored only in this browser via localStorage.</span>
+            </label>
+
+            <label className="field">
+              <span>Model</span>
+              <input
+                id="model-id"
+                type="text"
+                list="model-options"
+                spellCheck={false}
+                placeholder="openrouter/free"
+                value={modelIdInput}
+                onChange={(event) => setModelIdInput(event.target.value)}
+                onFocus={() => {
+                  void loadModelOptions();
                 }}
               />
-            </section>
+              <datalist id="model-options">
+                {modelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId} />
+                ))}
+              </datalist>
+              <span className="field-note">
+                Defaults to <code>openrouter/free</code>.
+              </span>
+            </label>
           </div>
-        </aside>
-      </main>
 
-      <section className="input-grid">
-        <form
-          id="prompt-form"
-          className="panel input-panel"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            void submitCommandBar();
-          }}
-        >
-          <div className="panel-header input-panel-header">
+          <div className="button-row">
+            <button id="save-settings" type="button" onClick={() => void saveSettings()}>
+              Save settings
+            </button>
+            <button id="clear-transcript" type="button" onClick={clearTranscript}>
+              Clear transcript
+            </button>
+            <button id="reset-workspace" type="button" onClick={() => void resetWorkspace()}>
+              Reset workspace
+            </button>
+            <button id="refresh-workspace" type="button" onClick={() => void refreshWorkspaceTree()}>
+              Refresh workspace
+            </button>
+          </div>
+
+          <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
             <div>
-              <h2>Command bar</h2>
-              <p className="panel-copy">
-                Start with <code>!</code> to run just-bash. Plain text goes to the agent.
+              <h3 id="onboarding-title">{onboardingTitle}</h3>
+              <p id="onboarding-text" className="panel-copy">
+                {onboardingText.split("<code>").length > 1 ? null : onboardingText}
+                {onboardingText.includes("<code>") ? (
+                  <>
+                    {onboardingText.split("<code>")[0]}
+                    <code>{onboardingText.split("<code>")[1]?.split("</code>")[0] ?? ""}</code>
+                    {onboardingText.split("</code>")[1] ?? ""}
+                  </>
+                ) : null}
               </p>
             </div>
-            <span id="command-mode" className="mode-chip" data-mode={commandMode}>
-              {commandMode === "shell" ? "Shell mode" : "Agent mode"}
-            </span>
-          </div>
-
-          <textarea
-            ref={promptInputRef}
-            id="prompt-input"
-            rows={4}
-            placeholder="Ask the agent something, or run !ls -la against the OPFS workspace."
-            value={promptValue}
-            disabled={!isReady || isBusy}
-            onChange={(event) => setPromptValue(event.target.value)}
-            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-              if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
-                return;
-              }
-              event.preventDefault();
-              void submitCommandBar();
-            }}
-          />
-
-          <div className="input-footer">
-            <p className="input-hint">Press Ctrl+Enter or Cmd+Enter to submit.</p>
-            <div className="button-row">
-              <button id="prompt-submit" type="submit" disabled={!isReady || isBusy}>
-                {promptSubmitLabel}
-              </button>
-              <button
-                id="prompt-stop"
-                type="button"
-                disabled={!isBusy}
-                onClick={() => {
-                  agentRef.current?.abort();
-                  addReviewNotice("Agent abort requested.");
-                  appendActivity("\n[agent] abort requested.\n");
-                }}
-              >
-                Stop
-              </button>
+            <div className="button-row onboarding-actions">
+              {QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setMobileView("command");
+                    commandBarRef.current?.setText(action.value);
+                  }}
+                >
+                  {action.label}
+                </button>
+              ))}
             </div>
-          </div>
-        </form>
-      </section>
-    </div>
+          </section>
+        </section>
+
+        <nav className="mobile-nav" aria-label="Quick view switcher">
+          {([
+            ["settings", "Setup"],
+            ["command", "Drive"],
+            ["console", "Review"],
+            ["workspace", "Files"],
+          ] as const).map(([view, label]) => (
+            <button
+              key={view}
+              type="button"
+              className={`mobile-tab${mobileView === view ? " is-active" : ""}`}
+              data-mobile-target={view}
+              aria-pressed={mobileView === view}
+              onClick={() => {
+                setMobileView(view);
+                if (view === "command") {
+                  focusPromptInput();
+                }
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <main className="main-grid">
+          <section className="panel console-panel">
+            <div className="panel-header">
+              <h2>Console</h2>
+            </div>
+
+            <div className="console-stack">
+              <AssistantReviewPane
+                storageKey={STORAGE_KEYS.assistantThread}
+                reviewLogId="review-log"
+                viewportRef={reviewLogRef}
+                agentEnabled={hasSavedApiKey}
+                supplementalCount={reviewEntries.length}
+                emptyState={
+                  <div className="review-empty-state">
+                    <p className="review-empty-title">{hasSavedApiKey ? "Review is ready." : "Save a key to unlock assistant review."}</p>
+                    <p className="review-empty-copy">
+                      {hasSavedApiKey ? (
+                        <>
+                          Plain-text prompts stream through assistant-ui here. Commands that start with <code>!</code> stay inline as command cards.
+                        </>
+                      ) : (
+                        <>
+                          Plain-text prompts need an OpenRouter API key first. Commands that start with <code>!</code> already stay inline here as command cards.
+                        </>
+                      )}
+                    </p>
+                  </div>
+                }
+                supplementalEntries={reviewEntries.map((entry) => (
+                  <ReviewEntryView key={entry.id} entry={entry} />
+                ))}
+              />
+
+              <div className="console-grid">
+                <section className="console-section console-section-terminal">
+                  <div className="console-section-header">
+                    <h3>Terminal</h3>
+                  </div>
+                  <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                    {terminalText}
+                  </pre>
+                </section>
+
+                <section className="console-section console-section-activity">
+                  <div className="console-section-header">
+                    <h3>Agent activity</h3>
+                  </div>
+                  <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                    {activityText}
+                  </pre>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <aside className="panel workspace-panel">
+            <div className="panel-header">
+              <h2>Workspace</h2>
+            </div>
+            <div className="workspace-browser">
+              <div id="workspace-tree" className="workspace-tree" aria-label="Workspace files">
+                {workspaceEntries.map((entry) =>
+                  entry.kind === "directory" ? (
+                    <div
+                      key={entry.path}
+                      className="workspace-node workspace-node-directory"
+                      style={{ ["--depth" as string]: String(entry.depth) }}
+                    >
+                      {`▾ ${entry.name}`}
+                    </div>
+                  ) : (
+                    <button
+                      key={entry.path}
+                      type="button"
+                      className={`workspace-node${entry.path === activeFilePath ? " is-active" : ""}`}
+                      style={{ ["--depth" as string]: String(entry.depth) }}
+                      onClick={() => void openWorkspaceFile(entry.path)}
+                    >
+                      {entry.name}
+                    </button>
+                  ),
+                )}
+              </div>
+
+              <section className="file-viewer">
+                <div className="file-viewer-header">
+                  <div>
+                    <h3 id="file-title">{activeFilePath ? `${basename(activeFilePath)}${fileEditorDirty ? " *" : ""}` : "No file selected"}</h3>
+                    <p id="file-subtitle" className="file-subtitle">
+                      {activeFilePath ? activeFilePath : "Choose a file from the workspace to view or edit it."}
+                    </p>
+                  </div>
+
+                  <div className="button-row file-actions">
+                    <button
+                      id="file-reload"
+                      type="button"
+                      disabled={!activeFilePath}
+                      onClick={async () => {
+                        if (!activeFilePathRef.current) {
+                          return;
+                        }
+                        if (fileEditorDirtyRef.current) {
+                          const shouldDiscard = window.confirm("Reload this file and discard unsaved changes?");
+                          if (!shouldDiscard) {
+                            return;
+                          }
+                        }
+                        await loadWorkspaceFile(activeFilePathRef.current);
+                      }}
+                    >
+                      Reload file
+                    </button>
+                    <button id="file-save" type="button" disabled={!activeFilePath || !fileEditorDirty} onClick={() => void saveActiveFile()}>
+                      Save file
+                    </button>
+                  </div>
+                </div>
+
+                <textarea
+                  id="file-editor"
+                  className="file-editor"
+                  spellCheck={false}
+                  placeholder="Open a file from the workspace to inspect or edit it."
+                  disabled={!activeFilePath}
+                  value={fileEditorContent}
+                  onChange={(event) => {
+                    setFileEditorContent(event.target.value);
+                    if (activeFilePath) {
+                      setFileEditorDirty(true);
+                    }
+                  }}
+                />
+              </section>
+            </div>
+          </aside>
+        </main>
+
+        <section className="input-grid">
+          <AssistantCommandBar
+            ref={commandBarRef}
+            isReady={isReady}
+            isBusy={isBusy}
+            agentEnabled={hasSavedApiKey}
+            onRunShell={handleShellSubmit}
+            onMissingAgentKey={handleMissingAgentKey}
+            onMissingShellCommand={handleMissingShellCommand}
+            onBeforeAgentSubmit={handleBeforeAgentSubmit}
+            onAbortAgent={handleAbortAgent}
+          />
+        </section>
+      </div>
+    </AssistantRuntimeScope>
   );
 }
