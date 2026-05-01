@@ -203,7 +203,7 @@ function AssistantRuntimeScope({ adapter, storageKey, runtimeOptions, children }
 
 export function App() {
   const savedApiKeyInitial = readStorageText(STORAGE_KEYS.apiKey);
-  const savedModelInitial = readStorageText(STORAGE_KEYS.modelId, getDefaultModelId());
+  const savedModelInitial = readStorageText(STORAGE_KEYS.modelId);
   const savedCwdInitial = readStorageText(STORAGE_KEYS.shellCwd, "/");
 
   const workspace = useMemo(() => new OpfsWorkspace(), []);
@@ -245,7 +245,6 @@ export function App() {
   const [fileEditorContent, setFileEditorContent] = useState("");
   const [fileEditorDirty, setFileEditorDirty] = useState(false);
   const [isReady, setIsReady] = useState(false);
-  const [isSetupExpanded, setIsSetupExpanded] = useState(() => savedApiKeyInitial.trim().length === 0);
   const [pendingDriveText, setPendingDriveText] = useState<string>();
 
   const suggestionAdapter = useMemo(
@@ -330,8 +329,10 @@ export function App() {
   );
 
   const hasSavedApiKey = savedApiKey.trim().length > 0;
-  const defaultRoute: AppRoute = "/session";
-  const currentRoute: AppRoute = isAppRoute(route) ? route : defaultRoute;
+  const hasSavedModelId = savedModelId.trim().length > 0;
+  const hasAgentConfig = hasSavedApiKey && hasSavedModelId;
+  const defaultRoute: AppRoute = hasAgentConfig ? "/session" : "/setup";
+  const currentRoute: AppRoute = !hasAgentConfig ? "/setup" : isAppRoute(route) ? route : defaultRoute;
 
   useEffect(() => {
     if (route !== currentRoute) {
@@ -642,7 +643,7 @@ export function App() {
         readModelId: () => savedModelIdRef.current,
       });
 
-      await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
+      await updateAgentConfiguration(agent, savedModelIdRef.current, shell, workspace);
       agent.subscribe(async (event) => {
         if (!isMountedRef.current) {
           return;
@@ -680,7 +681,7 @@ export function App() {
         const agent = await getOrCreateAgent();
         const shell = await getShell();
         const { updateAgentConfiguration } = await import("./agent-session");
-        await updateAgentConfiguration(agent, savedModelIdRef.current, shell);
+        await updateAgentConfiguration(agent, savedModelIdRef.current, shell, workspace);
 
         let assistantText = "";
         let assistantParts: AssistantContentPart[] = [];
@@ -816,27 +817,26 @@ export function App() {
 
   const saveSettings = useCallback(async () => {
     const nextApiKey = apiKeyInput.trim();
-    const nextModelId = modelIdInput.trim() || getDefaultModelId();
+    const nextModelId = modelIdInput.trim();
     localStorage.setItem(STORAGE_KEYS.apiKey, nextApiKey);
     localStorage.setItem(STORAGE_KEYS.modelId, nextModelId);
     setSavedApiKey(nextApiKey);
     setSavedModelId(nextModelId);
-    setIsSetupExpanded(nextApiKey.length === 0);
 
-    if (agentRef.current) {
+    if (agentRef.current && nextApiKey && nextModelId) {
       const shell = await getShell();
       const { updateAgentConfiguration } = await import("./agent-session");
-      await updateAgentConfiguration(agentRef.current, nextModelId, shell);
+      await updateAgentConfiguration(agentRef.current, nextModelId, shell, workspace);
     }
 
     appendTerminal("\n[settings] saved OpenRouter credentials and model selection.\n");
-    navigate(nextApiKey ? "/session" : "/setup");
-    if (nextApiKey) {
+    navigate(nextApiKey && nextModelId ? "/session" : "/setup");
+    if (nextApiKey && nextModelId) {
       window.requestAnimationFrame(() => {
         focusPromptInput();
       });
     }
-  }, [apiKeyInput, appendTerminal, focusPromptInput, getShell, modelIdInput, navigate]);
+  }, [apiKeyInput, appendTerminal, focusPromptInput, getShell, modelIdInput, navigate, workspace]);
 
   const runManualShell = useCallback(
     async (command: string) => {
@@ -889,9 +889,9 @@ export function App() {
   );
 
   const handleMissingAgentKey = useCallback(() => {
-    addReviewNotice("Save an OpenRouter API key before sending a prompt.", "error");
-    appendActivity("\n[error] Save an OpenRouter API key before sending a prompt.\n");
-    setStatus("Missing API key", "error");
+    addReviewNotice("Save an OpenRouter API key and model string before sending a prompt.", "error");
+    appendActivity("\n[error] Save an OpenRouter API key and model string before sending a prompt.\n");
+    setStatus("Setup required", "error");
     navigate("/setup");
   }, [addReviewNotice, appendActivity, navigate, setStatus]);
 
@@ -979,10 +979,10 @@ export function App() {
     };
   }, [ensureStarterWorkspace, refreshWorkspaceTree, setStatus, workspace]);
 
-  const setupCopy = hasSavedApiKey
+  const setupCopy = hasAgentConfig
     ? "Key and model stay in this browser."
-    : "Save a key to unlock agent prompts. Shell commands already work.";
-  const appDataState = hasSavedApiKey ? "ready" : "setup";
+    : "Save an OpenRouter API key and model string to unlock Session and Files.";
+  const appDataState = hasAgentConfig ? "ready" : "setup";
   const hasShellTrace = terminalText.trim() !== DEFAULT_TERMINAL_TEXT.trim();
   const hasToolTrace = activityText.trim() !== DEFAULT_ACTIVITY_TEXT.trim();
 
@@ -1027,145 +1027,103 @@ export function App() {
           </div>
         </header>
 
-        <nav className="surface-nav" aria-label="Primary surfaces">
-          {([
-            ["/session", "Session"],
-            ["/files", "Files"],
-          ] as const).map(([path, label]) => (
-            <button
-              key={path}
-              type="button"
-              className={`surface-link${currentRoute === path ? " is-active" : ""}`}
-              data-route-target={path}
-              aria-pressed={currentRoute === path}
-              onClick={() => {
-                navigate(path);
-                if (path === "/session") {
-                  window.requestAnimationFrame(() => {
-                    focusPromptInput();
-                  });
-                }
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
+        {hasAgentConfig ? (
+          <nav className="surface-nav" aria-label="Primary surfaces">
+            {([
+              ["/session", "Session"],
+              ["/files", "Files"],
+            ] as const).map(([path, label]) => (
+              <button
+                key={path}
+                type="button"
+                className={`surface-link${currentRoute === path ? " is-active" : ""}`}
+                data-route-target={path}
+                aria-pressed={currentRoute === path}
+                onClick={() => {
+                  navigate(path);
+                  if (path === "/session") {
+                    window.requestAnimationFrame(() => {
+                      focusPromptInput();
+                    });
+                  }
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        ) : null}
 
         <main className="route-shell" data-route={currentRoute}>
           {currentRoute === "/setup" ? (
-            <section className="panel controls" data-state={appDataState} data-expanded={isSetupExpanded ? "true" : "false"}>
+            <section className="panel controls" data-state={appDataState}>
               <div className="panel-header surface-header controls-header">
                 <div>
                   <h2>Setup</h2>
                   <p className="panel-copy">{setupCopy}</p>
                 </div>
-                {hasSavedApiKey ? (
-                  <button
-                    id="toggle-setup"
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      setIsSetupExpanded((current) => !current);
-                    }}
-                  >
-                    {isSetupExpanded ? "Hide setup" : "Edit setup"}
-                  </button>
-                ) : null}
               </div>
 
-              {hasSavedApiKey && !isSetupExpanded ? (
-                <p className="setup-summary">Run the session from one lane. Transcript, tools, and shell output stay together.</p>
-              ) : (
-                <>
-                  <div className="control-grid">
-                    <label className="field">
-                      <span>OpenRouter API key</span>
-                      <input
-                        id="api-key"
-                        type="password"
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="sk-or-v1-..."
-                        value={apiKeyInput}
-                        onChange={(event) => setApiKeyInput(event.target.value)}
-                      />
-                      <span className="field-note">Stored only in this browser via localStorage.</span>
-                    </label>
+              <div className="control-grid">
+                <label className="field">
+                  <span>OpenRouter API key</span>
+                  <input
+                    id="api-key"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="sk-or-v1-..."
+                    value={apiKeyInput}
+                    onChange={(event) => setApiKeyInput(event.target.value)}
+                  />
+                  <span className="field-note">Stored only in this browser via localStorage.</span>
+                </label>
 
-                    <label className="field">
-                      <span>Model</span>
-                      <input
-                        id="model-id"
-                        type="text"
-                        list="model-options"
-                        spellCheck={false}
-                        placeholder="openrouter/free"
-                        value={modelIdInput}
-                        onChange={(event) => setModelIdInput(event.target.value)}
-                        onFocus={() => {
-                          void loadModelOptions();
-                        }}
-                      />
-                      <datalist id="model-options">
-                        {modelOptions.map((modelId) => (
-                          <option key={modelId} value={modelId} />
-                        ))}
-                      </datalist>
-                      <span className="field-note">
-                        Defaults to <code>openrouter/free</code>.
-                      </span>
-                    </label>
-                  </div>
+                <label className="field">
+                  <span>Model</span>
+                  <input
+                    id="model-id"
+                    type="text"
+                    list="model-options"
+                    spellCheck={false}
+                    placeholder="openrouter/free"
+                    value={modelIdInput}
+                    onChange={(event) => setModelIdInput(event.target.value)}
+                    onFocus={() => {
+                      void loadModelOptions();
+                    }}
+                  />
+                  <datalist id="model-options">
+                    {modelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId} />
+                    ))}
+                  </datalist>
+                  <span className="field-note">
+                    Suggested: <code>openrouter/free</code>.
+                  </span>
+                </label>
+              </div>
 
-                  <div className="button-row">
-                    <button id="save-settings" type="button" onClick={() => void saveSettings()}>
-                      Save settings
-                    </button>
-                    <button id="clear-transcript" type="button" className="secondary-button" onClick={clearTranscript}>
-                      Clear transcript
-                    </button>
-                    <button id="reset-workspace" type="button" className="secondary-button" onClick={() => void resetWorkspace()}>
-                      Reset workspace
-                    </button>
-                    <button id="refresh-workspace" type="button" className="secondary-button" onClick={() => void refreshWorkspaceTree()}>
-                      Refresh files
-                    </button>
-                  </div>
+              <div className="button-row">
+                <button id="save-settings" type="button" onClick={() => void saveSettings()}>
+                  Save settings
+                </button>
+                <button id="clear-transcript" type="button" className="secondary-button" onClick={clearTranscript}>
+                  Clear transcript
+                </button>
+                <button id="reset-workspace" type="button" className="secondary-button" onClick={() => void resetWorkspace()}>
+                  Reset workspace
+                </button>
+                <button id="refresh-workspace" type="button" className="secondary-button" onClick={() => void refreshWorkspaceTree()}>
+                  Refresh files
+                </button>
+              </div>
 
-                  {hasSavedApiKey ? (
-                    <p className="setup-summary">Run the session from one lane. Transcript, tools, and shell output stay together.</p>
-                  ) : (
-                    <section id="onboarding-panel" className="onboarding-panel" data-state={appDataState}>
-                      <div>
-                        <h3 id="onboarding-title">Quick start</h3>
-                        <p id="onboarding-text" className="panel-copy">
-                          Save a key for agent prompts, or start now with <code>!</code> in Session.
-                        </p>
-                      </div>
-                      <div className="button-row onboarding-actions">
-                        {QUICK_ACTIONS.map((action) => (
-                          <button
-                            key={action.label}
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => {
-                              navigate("/session");
-                              setPendingDriveText(action.value);
-                            }}
-                          >
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-                </>
-              )}
+              {hasAgentConfig ? <p className="setup-summary">Session and Files are unlocked. Return here any time from the Setup button.</p> : null}
             </section>
           ) : null}
 
-          {currentRoute === "/session" ? (
+          {currentRoute === "/session" && hasAgentConfig ? (
             <section className="panel session-panel">
               <div className="panel-header surface-header">
                 <div>
@@ -1182,14 +1140,12 @@ export function App() {
                   supplementalCount={reviewEntries.length}
                   emptyState={
                     <div className="review-empty-state">
-                      <p className="review-empty-title">{hasSavedApiKey ? "Start the session here." : "Session is ready for shell."}</p>
+                      <p className="review-empty-title">{hasAgentConfig ? "Start the session here." : "Setup is required first."}</p>
                       <p className="review-empty-copy">
-                        {hasSavedApiKey ? (
+                        {hasAgentConfig ? (
                           <>Send a prompt or run a shell command. Everything lands in this same session.</>
                         ) : (
-                          <>
-                            Run <code>!</code> commands now, or save a key to enable agent prompts.
-                          </>
+                          <>Save an OpenRouter API key and model string to unlock the session.</>
                         )}
                       </p>
                     </div>
@@ -1210,7 +1166,8 @@ export function App() {
                 }
                 isReady={isReady}
                 isBusy={isBusy}
-                agentEnabled={hasSavedApiKey}
+                agentEnabled={hasAgentConfig}
+                onClearSession={clearTranscript}
                 onRunShell={handleShellSubmit}
                 onMissingAgentKey={handleMissingAgentKey}
                 onMissingShellCommand={handleMissingShellCommand}
@@ -1242,7 +1199,7 @@ export function App() {
             </section>
           ) : null}
 
-          {currentRoute === "/files" ? (
+          {currentRoute === "/files" && hasAgentConfig ? (
             <aside className="panel workspace-panel">
               <div className="panel-header surface-header">
                 <div>

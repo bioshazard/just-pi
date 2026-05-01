@@ -39,5 +39,6 @@ If the site does not publish on the first run, set the repository's **Pages** so
 
 - Files persist in the browser's origin-private storage until you reset the workspace or clear site data.
 - The API key is never hardcoded; it is read from `localStorage` at runtime.
+- If `AGENTS.md` exists in OPFS, the agent appends its contents to the base system prompt before running.
 - This scaffold uses the Pi agent core and Pi AI packages directly so the browser bundle stays compatible while preserving the coding-agent-style tool surface.
 - The current UI layer is React, but the browser runtime core remains in `src/opfs.ts`, `src/shell.ts`, and `src/agent-session.ts`.

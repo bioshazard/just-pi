@@ -12,6 +12,7 @@ interface AssistantCommandBarProps {
   isReady: boolean;
   isBusy: boolean;
   agentEnabled: boolean;
+  onClearSession(): void;
   onRunShell(command: string): Promise<void>;
   onMissingAgentKey(): void;
   onMissingShellCommand(): void;
@@ -31,6 +32,7 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
       isReady,
       isBusy,
       agentEnabled,
+      onClearSession,
       onRunShell,
       onMissingAgentKey,
       onMissingShellCommand,
@@ -200,6 +202,20 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
       />
       <div className="input-footer">
         <div className="input-footer-row">
+          <div className="button-row input-utility-actions">
+            <button
+              id="prompt-clear"
+              type="button"
+              className="secondary-button"
+              disabled={inputDisabled}
+              onClick={() => {
+                aui.composer().setText("");
+                onClearSession();
+              }}
+            >
+              Clear
+            </button>
+          </div>
           <div className="button-row input-actions">
             <button
               ref={submitButtonRef}

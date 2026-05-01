@@ -37,14 +37,45 @@ function applyEdits(content: string, edits: Array<{ oldText: string; newText: st
   return next;
 }
 
-function buildSystemPrompt(cwd: string): string {
-  return [
+async function readAgentsInstructions(workspace: OpfsWorkspace, cwd: string): Promise<string[]> {
+  const instructionPaths: string[] = [];
+  let current = normalizePath(cwd);
+  while (true) {
+    const candidate = current === "/" ? "/AGENTS.md" : normalizePath(`${current}/AGENTS.md`);
+    instructionPaths.push(candidate);
+    if (current === "/") {
+      break;
+    }
+    current = dirname(current);
+  }
+
+  const sections: string[] = [];
+  for (const path of instructionPaths.reverse()) {
+    if (!(await workspace.exists(path))) {
+      continue;
+    }
+    const content = (await workspace.readText(path)).trim();
+    if (!content) {
+      continue;
+    }
+    sections.push(`Instructions from ${path}:\n${content}`);
+  }
+  return sections;
+}
+
+async function buildSystemPrompt(workspace: OpfsWorkspace, cwd: string): Promise<string> {
+  const basePrompt = [
     "You are Browser-Native Systems Engineer.",
     "You are running inside a browser-hosted coding workspace backed by the Origin Private File System (OPFS).",
     "All file reads, writes, searches, and bash commands operate on the same persistent workspace.",
     `Current working directory: ${cwd}`,
     "Use tools instead of guessing file contents. Keep responses concise and implementation-focused.",
   ].join("\n");
+  const agentsInstructions = await readAgentsInstructions(workspace, cwd);
+  if (agentsInstructions.length === 0) {
+    return basePrompt;
+  }
+  return [basePrompt, ...agentsInstructions].join("\n\n");
 }
 
 export interface BrowserAgentSessionOptions {
@@ -250,12 +281,13 @@ export async function createBrowserAgentSession(options: BrowserAgentSessionOpti
   }
 
   const { streamSimple } = await loadPiAi();
+  const systemPrompt = await buildSystemPrompt(options.workspace, options.shell.getCwd());
 
   const agent = new Agent({
     initialState: {
       model,
       thinkingLevel: model.reasoning ? "medium" : "off",
-      systemPrompt: buildSystemPrompt(options.shell.getCwd()),
+      systemPrompt,
       tools: createAgentTools(options.workspace, options.shell),
     },
     toolExecution: "parallel",
@@ -279,12 +311,12 @@ export async function createBrowserAgentSession(options: BrowserAgentSessionOpti
   return agent;
 }
 
-export async function updateAgentConfiguration(agent: Agent, modelId: string, shell: ShellRuntime): Promise<void> {
+export async function updateAgentConfiguration(agent: Agent, modelId: string, shell: ShellRuntime, workspace: OpfsWorkspace): Promise<void> {
   const model = await findOpenRouterModel(modelId);
   if (!model) {
     return;
   }
   agent.state.model = model;
   agent.state.thinkingLevel = model.reasoning ? "medium" : "off";
-  agent.state.systemPrompt = buildSystemPrompt(shell.getCwd());
+  agent.state.systemPrompt = await buildSystemPrompt(workspace, shell.getCwd());
 }

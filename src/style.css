@@ -1056,13 +1056,18 @@ h2 {
 .input-footer-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 0.75rem;
 }
 
 .input-hints {
   display: grid;
   gap: 0.2rem;
+}
+
+.input-utility-actions {
+  margin-top: 0;
+  justify-content: flex-start;
 }
 
 .input-actions {
