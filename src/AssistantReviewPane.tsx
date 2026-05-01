@@ -4,7 +4,6 @@ import {
   ThreadPrimitive,
   useAuiState,
   useMessagePartFile,
-  type MessageState,
   type ThreadMessageLike,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
@@ -13,7 +12,6 @@ import { useEffect, type ReactNode, type Ref } from "react";
 interface AssistantReviewPaneProps {
   storageKey: string;
   reviewLogId: string;
-  agentEnabled: boolean;
   supplementalCount: number;
   supplementalEntries: ReactNode;
   emptyState: ReactNode;
@@ -38,18 +36,6 @@ export function readStoredAssistantMessages(storageKey: string): readonly Thread
   } catch {
     return [];
   }
-}
-
-function getMessageText(message: Pick<MessageState, "content">): string {
-  return message.content
-    .filter((part): part is Extract<MessageState["content"][number], { type: "text" }> => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
-}
-
-function toCountLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function formatToolValue(value: unknown): string {
@@ -96,62 +82,6 @@ function AssistantFilePart() {
       <span className="assistant-file-name">{file.filename || "attachment"}</span>
       <span className="assistant-file-meta">{file.mimeType || "file"}</span>
     </div>
-  );
-}
-
-function AssistantReviewSummary({
-  agentEnabled,
-  supplementalCount,
-}: Pick<AssistantReviewPaneProps, "agentEnabled" | "supplementalCount">) {
-  const messages = useAuiState((state) => state.thread.messages);
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-
-  const userCount = messages.filter((message) => message.role === "user").length;
-  const assistantCount = messages.filter((message) => message.role === "assistant").length;
-  const latestPrompt = [...messages]
-    .reverse()
-    .find((message) => message.role === "user" && getMessageText(message).length > 0);
-
-  const state = !agentEnabled ? "locked" : isRunning ? "running" : messages.length > 0 ? "active" : "idle";
-
-  const title =
-    state === "locked"
-      ? "Agent mode is locked."
-      : state === "running"
-        ? "Assistant is responding."
-        : state === "active"
-          ? "Assistant conversation is live."
-          : "Review is ready.";
-
-  const copy =
-    state === "locked"
-      ? "Save an OpenRouter API key to turn plain-text prompts into assistant runs. Commands that start with ! still land here as inline command cards."
-      : state === "running"
-        ? latestPrompt
-          ? `Streaming the latest reply to: "${getMessageText(latestPrompt)}"`
-          : "Streaming the latest reply now."
-        : state === "active"
-          ? "Plain-text prompts stay in the assistant thread here, while ! commands keep their separate inline cards."
-          : "Plain-text prompts stream through assistant-ui here. Commands that start with ! stay inline as command cards.";
-
-  return (
-    <header className="assistant-review-summary" data-state={state}>
-      <div className="assistant-review-summary-copy">
-        <p className="assistant-review-summary-kicker">assistant-ui review</p>
-        <h3 className="assistant-review-summary-title">{title}</h3>
-        <p className="assistant-review-summary-text">{copy}</p>
-      </div>
-      <div className="assistant-review-summary-badges" aria-label="Review activity summary">
-        <span className="assistant-review-badge">{toCountLabel(userCount, "prompt")}</span>
-        <span className="assistant-review-badge">{toCountLabel(assistantCount, "reply", "replies")}</span>
-        {supplementalCount > 0 ? (
-          <span className="assistant-review-badge">{toCountLabel(supplementalCount, "card")}</span>
-        ) : null}
-        <span className="assistant-review-badge assistant-review-badge-state" data-state={state}>
-          {state === "locked" ? "key needed" : state === "running" ? "live" : state === "active" ? "history" : "ready"}
-        </span>
-      </div>
-    </header>
   );
 }
 
@@ -204,7 +134,6 @@ function AssistantReviewMessage() {
 export function AssistantReviewPane({
   storageKey,
   reviewLogId,
-  agentEnabled,
   supplementalCount,
   supplementalEntries,
   emptyState,
@@ -218,7 +147,6 @@ export function AssistantReviewPane({
 
   return (
     <ThreadPrimitive.Root className="assistant-review-root">
-      <AssistantReviewSummary agentEnabled={agentEnabled} supplementalCount={supplementalCount} />
       <ThreadPrimitive.Viewport
         id={reviewLogId}
         ref={viewportRef}

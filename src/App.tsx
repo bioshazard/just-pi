@@ -1065,7 +1065,6 @@ export function App() {
                 storageKey={STORAGE_KEYS.assistantThread}
                 reviewLogId="review-log"
                 viewportRef={reviewLogRef}
-                agentEnabled={hasSavedApiKey}
                 supplementalCount={reviewEntries.length}
                 emptyState={
                   <div className="review-empty-state">
