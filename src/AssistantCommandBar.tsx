@@ -10,7 +10,10 @@ interface AssistantCommandBarProps {
   isReady: boolean;
   isBusy: boolean;
   agentEnabled: boolean;
-  fallbackSuggestions: readonly string[];
+  fallbackSuggestions: readonly {
+    label: string;
+    prompt: string;
+  }[];
   onRunShell(command: string): Promise<void>;
   onMissingAgentKey(): void;
   onMissingShellCommand(): void;
@@ -43,7 +46,10 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
   const attachments = useAuiState((state) => state.composer.attachments);
   const isAgentRunning = useAuiState((state) => state.thread.isRunning);
   const suggestions = useAuiState((state) => state.thread.suggestions);
-  const visibleSuggestions = suggestions.length > 0 ? suggestions.map((suggestion) => suggestion.prompt) : fallbackSuggestions;
+  const visibleSuggestions =
+    suggestions.length > 0
+      ? suggestions.map((suggestion) => ({ label: suggestion.prompt, prompt: suggestion.prompt }))
+      : fallbackSuggestions;
 
   const commandMode = promptValue.trim().startsWith("!") ? "shell" : "agent";
   const promptSubmitLabel = commandMode === "shell" ? "Run command" : "Send prompt";
@@ -207,15 +213,15 @@ export const AssistantCommandBar = forwardRef<AssistantCommandBarHandle, Assista
         <div className="command-suggestions" aria-label="Prompt suggestions">
           {visibleSuggestions.map((suggestion) => (
             <button
-              key={suggestion}
+              key={suggestion.prompt}
               type="button"
               className="secondary-button command-suggestion"
               onClick={() => {
-                aui.composer().setText(suggestion);
+                aui.composer().setText(suggestion.prompt);
                 inputRef.current?.focus();
               }}
             >
-              {suggestion}
+              {suggestion.label}
             </button>
           ))}
         </div>

@@ -1199,7 +1199,10 @@ export function App() {
             isReady={isReady}
             isBusy={isBusy}
             agentEnabled={hasSavedApiKey}
-            fallbackSuggestions={QUICK_ACTIONS.map((action) => action.value)}
+            fallbackSuggestions={QUICK_ACTIONS.map((action) => ({
+              label: action.label,
+              prompt: action.value,
+            }))}
             onRunShell={handleShellSubmit}
             onMissingAgentKey={handleMissingAgentKey}
             onMissingShellCommand={handleMissingShellCommand}
