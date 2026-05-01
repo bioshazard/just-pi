@@ -1066,7 +1066,16 @@ export function App() {
 
               <div className="control-grid">
                 <label className="field">
-                  <span>OpenRouter API key</span>
+                  <span className="field-label">
+                    <span>OpenRouter API key</span>
+                    <a
+                      href="https://openrouter.ai/workspaces/default/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      (create a $0 budget key here)
+                    </a>
+                  </span>
                   <input
                     id="api-key"
                     type="password"

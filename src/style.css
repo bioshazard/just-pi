@@ -325,6 +325,23 @@ h2 {
   font-size: 0.86rem;
 }
 
+.field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.field-label a {
+  color: #8fb2ff;
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.field-label a:hover {
+  text-decoration: underline;
+}
+
 .field-note {
   color: #8fa4d3;
   font-size: 0.78rem;
