@@ -18,7 +18,7 @@
 
 - **Setup** configures the system, then collapses into a compact summary with an explicit expand action.
 - **Drive** is the primary action surface.
-- **Review** is the canonical timeline of what happened: prompts, tool calls, shell output, notices, stream state. Prompts and shell runs navigate here.
+- **Review** is the canonical timeline of what happened. Prompts and shell runs navigate here; raw shell and tool traces stay secondary and collapsible.
 - **Files** is a working editor, not a passive preview.
 - Onboarding points into **Drive** instead of duplicating every other surface at once.
 
@@ -49,7 +49,7 @@
 - Prefer fewer, stronger primitives over one-off variants.
 - Keep labels short and operational.
 - Let the route itself provide focus; avoid showing unrelated controls in the same view.
-- Let the review lane explain system behavior; avoid duplicating that explanation elsewhere.
+- Let the review transcript explain system behavior; avoid duplicating the same event across multiple primary panes.
 - Keep the workspace visually quiet so file hierarchy and edit state stand out.
 - Preserve identical surface names and route roles across desktop and mobile.
 - Reduce repeated explanatory copy; keep the shell compact and serious.

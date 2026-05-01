@@ -130,6 +130,8 @@ const QUICK_ACTIONS = [
 ] as const;
 
 const APP_ROUTES = ["/setup", "/drive", "/review", "/files"] as const satisfies readonly AppRoute[];
+const DEFAULT_TERMINAL_TEXT = "just-pi ready.\n";
+const DEFAULT_ACTIVITY_TEXT = "Tool stream ready.\n";
 
 function readStorageText(key: string, fallback = ""): string {
   return localStorage.getItem(key) ?? fallback;
@@ -883,9 +885,9 @@ export function App() {
       }
 
       setTerminalText((current) =>
-        current || "just-pi ready.\n",
+        current || DEFAULT_TERMINAL_TEXT,
       );
-      setActivityText((current) => current || "Tool stream ready.\n");
+      setActivityText((current) => current || DEFAULT_ACTIVITY_TEXT);
 
       setStatus("Idle", "idle");
       setIsBusy(false);
@@ -908,6 +910,8 @@ export function App() {
     ? "Key and model stay in this browser."
     : "Save a key to unlock agent prompts. Shell commands already work.";
   const appDataState = hasSavedApiKey ? "ready" : "setup";
+  const hasShellTrace = terminalText.trim() !== DEFAULT_TERMINAL_TEXT.trim();
+  const hasToolTrace = activityText.trim() !== DEFAULT_ACTIVITY_TEXT.trim();
 
   return (
     <AssistantRuntimeScope
@@ -1109,11 +1113,11 @@ export function App() {
               <div className="panel-header surface-header">
                 <div>
                   <h2>Review</h2>
-                  <p className="panel-copy">Timeline first; traces stay below.</p>
+                  <p className="panel-copy">Transcript first; raw traces stay collapsed.</p>
                 </div>
               </div>
 
-              <div className="console-stack">
+              <div className="review-stack">
                 <AssistantReviewPane
                   storageKey={STORAGE_KEYS.assistantThread}
                   reviewLogId="review-log"
@@ -1136,25 +1140,26 @@ export function App() {
                   ))}
                 />
 
-                <div className="console-grid">
-                  <section className="console-section console-section-terminal">
-                    <div className="console-section-header">
-                      <h3>Shell output</h3>
-                    </div>
-                    <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
-                      {terminalText}
-                    </pre>
+                {hasShellTrace || hasToolTrace ? (
+                  <section className="review-traces" aria-label="Raw traces">
+                    {hasShellTrace ? (
+                      <details className="review-trace">
+                        <summary className="review-trace-summary">Shell trace</summary>
+                        <pre ref={terminalRef} id="terminal" className="terminal" aria-live="polite">
+                          {terminalText}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {hasToolTrace ? (
+                      <details className="review-trace">
+                        <summary className="review-trace-summary">Tool trace</summary>
+                        <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
+                          {activityText}
+                        </pre>
+                      </details>
+                    ) : null}
                   </section>
-
-                  <section className="console-section console-section-activity">
-                    <div className="console-section-header">
-                      <h3>Tool stream</h3>
-                    </div>
-                    <pre ref={activityRef} id="activity-log" className="terminal activity-log" aria-live="polite">
-                      {activityText}
-                    </pre>
-                  </section>
-                </div>
+                ) : null}
               </div>
             </section>
           ) : null}
